@@ -1,6 +1,6 @@
 //! Upstream management — работа с backend серверами
 
-use crate::{Intent, Result};
+use crate::Intent;
 use hdrhistogram::Histogram;
 use parking_lot::RwLock;
 use std::sync::Arc;

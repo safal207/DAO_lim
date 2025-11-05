@@ -1,0 +1,122 @@
+# DAO Configuration — Dynamic Awareness Orchestrator
+# Пример конфигурации лиминального шлюза
+
+[server]
+bind = "0.0.0.0:8443"
+# TLS certificates (uncomment when ready)
+# tls_cert = "certs/dao.crt"
+# tls_key  = "certs/dao.key"
+workers = 4
+
+[telemetry]
+prometheus_bind = "0.0.0.0:9102"
+
+# ============================================================
+# Routes — Маршруты и правила
+# ============================================================
+
+[routes]
+
+# Маршрут 1: API v1 с realtime intent
+[[routes.rule]]
+name = "api-v1"
+policy = "resonant"
+intent = "realtime"
+
+  [routes.rule.match]
+  host = "api.example.com"
+  path_prefix = "/v1/"
+
+  [[routes.rule.upstreams]]
+  name = "api-backend-1"
+  url  = "http://127.0.0.1:8081"
+  intent = ["realtime", "low-latency"]
+  weight = 2
+
+  [[routes.rule.upstreams]]
+  name = "api-backend-2"
+  url  = "http://127.0.0.1:8082"
+  intent = ["realtime"]
+  weight = 1
+
+  [routes.rule.filters]
+  request_headers_add = { "X-DAO-Gateway" = "true", "X-DAO-Version" = "0.1.0" }
+  rate_limit_rps = 1000
+
+# Маршрут 2: Batch API
+[[routes.rule]]
+name = "batch-api"
+policy = "resonant"
+intent = "batch"
+
+  [routes.rule.match]
+  host = "batch.example.com"
+  path_prefix = "/api/"
+
+  [[routes.rule.upstreams]]
+  name = "batch-worker-1"
+  url  = "http://127.0.0.1:8091"
+  intent = ["batch", "high-throughput"]
+  weight = 1
+
+  [[routes.rule.upstreams]]
+  name = "batch-worker-2"
+  url  = "http://127.0.0.1:8092"
+  intent = ["batch"]
+  weight = 1
+
+  [routes.rule.filters]
+  request_headers_add = { "X-Processing-Mode" = "batch" }
+  rate_limit_rps = 100
+
+# Маршрут 3: WebSocket streaming
+[[routes.rule]]
+name = "ws-stream"
+policy = "resonant"
+intent = "streaming"
+
+  [routes.rule.match]
+  host = "stream.example.com"
+  upgrade = "websocket"
+
+  [[routes.rule.upstreams]]
+  name = "ws-backend-1"
+  url  = "ws://127.0.0.1:9001"
+  intent = ["streaming", "realtime"]
+  weight = 1
+
+# Маршрут 4: Static content
+[[routes.rule]]
+name = "static"
+policy = "round-robin"
+
+  [routes.rule.match]
+  host = "static.example.com"
+  path_prefix = "/"
+
+  [[routes.rule.upstreams]]
+  name = "cdn-1"
+  url  = "http://127.0.0.1:8080"
+  weight = 1
+
+# ============================================================
+# Policies — Политики балансировки
+# ============================================================
+
+[policies.resonant]
+# Веса для resonant load balancing
+w_load = 0.6      # Вес load_resonance (латентность + ошибки + очередь)
+w_intent = 0.3    # Вес intent gap (несовпадение намерений)
+w_tempo = 0.1     # Вес tempo spikiness (вариативность RPS)
+
+[policies.aggressive]
+# Агрессивная политика: сильный упор на load
+w_load = 0.8
+w_intent = 0.15
+w_tempo = 0.05
+
+[policies.intent-first]
+# Intent-first: приоритет совпадению намерений
+w_load = 0.3
+w_intent = 0.6
+w_tempo = 0.1

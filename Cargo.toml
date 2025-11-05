@@ -80,6 +80,9 @@ async-trait = "0.1"
 dashmap = "6.1"
 parking_lot = "0.12"
 
+# Random
+rand = "0.8"
+
 [profile.release]
 opt-level = 3
 lto = true

@@ -8,12 +8,16 @@
 //! - **Align**: Принятие решений и политики маршрутизации
 //! - **Flow**: Конвейер фильтров и трансформаций
 //! - **Memory**: Профили сервисов и горячая конфигурация
+//!
+//! И модуль лиминальных фич:
+//! - **Liminal**: Пограничные состояния и осознанность
 
 pub mod gate;
 pub mod sense;
 pub mod align;
 pub mod flow;
 pub mod memory;
+pub mod liminal;
 
 pub mod config;
 pub mod upstream;

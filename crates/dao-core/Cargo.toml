@@ -37,6 +37,7 @@ dashmap = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 hdrhistogram = { workspace = true }
+rand = { workspace = true }
 
 num_cpus = "1.16"
 

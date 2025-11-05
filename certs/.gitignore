@@ -1,0 +1,11 @@
+# Ignore all certificate and key files
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Except the generation script and README
+!generate-dev-certs.sh
+!README.md
+!.gitignore

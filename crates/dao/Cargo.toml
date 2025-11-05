@@ -1,0 +1,48 @@
+[package]
+name = "dao"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dao"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+
+dao-core = { path = "../dao-core" }
+dao-telemetry = { path = "../dao-telemetry" }
+dao-admin = { path = "../dao-admin" }
+dao-filters = { path = "../dao-filters" }
+
+[dependencies.http-body-util]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.bytes]
+workspace = true
+
+[dependencies.http]
+workspace = true
+
+[dependencies.pin-project]
+workspace = true

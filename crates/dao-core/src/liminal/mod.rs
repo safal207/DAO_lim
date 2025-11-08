@@ -11,6 +11,7 @@
 //! - Ritual Protocols — церемонии переходов
 //! - Adaptive Thresholds — самообучающиеся пороги
 //! - Presence Detection — состояния upstream
+//! - Orchestrator — центральный координатор
 
 pub mod shadow;
 pub mod quantum;
@@ -22,10 +23,11 @@ pub mod metamorphic;
 pub mod ritual;
 pub mod adaptive;
 pub mod presence;
+pub mod orchestrator;
 
 pub use shadow::ShadowTraffic;
 pub use quantum::QuantumRouter;
-pub use consciousness::{ConsciousnessLevel, AwarenessOrchestrator};
+pub use consciousness::{ConsciousnessLevel, AwarenessOrchestrator, AwarenessFactors};
 pub use temporal::TemporalResonance;
 pub use zones::LiminalZones;
 pub use echo::EchoAnalyzer;
@@ -33,3 +35,4 @@ pub use metamorphic::MetamorphicConfig;
 pub use ritual::RitualProtocol;
 pub use adaptive::AdaptiveThresholds;
 pub use presence::{PresenceState, PresenceDetector};
+pub use orchestrator::{LiminalOrchestrator, LiminalConfig};

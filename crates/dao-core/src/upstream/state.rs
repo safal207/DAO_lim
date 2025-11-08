@@ -1,6 +1,7 @@
 //! Upstream management — работа с backend серверами
 
 use crate::Intent;
+use crate::liminal::presence::{PresenceDetector, PresenceState};
 use hdrhistogram::Histogram;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ pub struct UpstreamState {
     pub intents: Vec<Intent>,
     pub weight: u32,
     pub stats: Arc<RwLock<UpstreamStats>>,
+    pub presence: Option<Arc<PresenceDetector>>,
 }
 
 impl UpstreamState {
@@ -24,7 +26,14 @@ impl UpstreamState {
             intents,
             weight,
             stats: Arc::new(RwLock::new(UpstreamStats::new())),
+            presence: None,
         }
+    }
+
+    /// Создать с PresenceDetector
+    pub fn with_presence_detector(mut self, detector: Arc<PresenceDetector>) -> Self {
+        self.presence = Some(detector);
+        self
     }
 
     /// Вычисление intent match score (0.0 = полное совпадение, 1.0 = нет совпадений)
@@ -46,6 +55,19 @@ impl UpstreamState {
     pub fn record_request(&self, latency: Duration, success: bool) {
         let mut stats = self.stats.write();
         stats.record(latency, success);
+
+        // Обновление presence detector
+        if let Some(presence) = &self.presence {
+            presence.record_check(success);
+        }
+    }
+
+    /// Получить состояние присутствия upstream
+    pub fn presence_state(&self) -> PresenceState {
+        self.presence
+            .as_ref()
+            .map(|p| p.current_state())
+            .unwrap_or(PresenceState::Unknown)
     }
 
     /// Получение текущей статистики

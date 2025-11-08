@@ -48,6 +48,7 @@ struct PresenceHistory {
 }
 
 /// Presence Detector — детектор состояния upstream
+#[derive(Debug)]
 pub struct PresenceDetector {
     state: RwLock<PresenceState>,
     history: RwLock<PresenceHistory>,

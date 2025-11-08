@@ -3,6 +3,10 @@
 use dao_core::{
     align::Align,
     gate::{Connection, Gate, Protocol},
+    liminal::{
+        echo::RequestEcho,
+        orchestrator::{LiminalConfig, LiminalOrchestrator},
+    },
     memory::Memory,
     sense::Sense,
     upstream::{ConnectionPool, UpstreamState},
@@ -27,6 +31,7 @@ pub struct DaoServer {
     memory: Arc<Memory>,
     upstreams: Arc<Vec<UpstreamState>>,
     pool: Arc<ConnectionPool>,
+    liminal: Arc<LiminalOrchestrator>,
 }
 
 impl DaoServer {
@@ -37,6 +42,9 @@ impl DaoServer {
         memory: Arc<Memory>,
         upstreams: Arc<Vec<UpstreamState>>,
     ) -> Self {
+        // Создаём LiminalOrchestrator с конфигурацией по умолчанию
+        let liminal = Arc::new(LiminalOrchestrator::new(LiminalConfig::default()));
+
         Self {
             gate: Arc::new(gate),
             sense: Arc::new(sense),
@@ -44,6 +52,29 @@ impl DaoServer {
             memory,
             upstreams,
             pool: Arc::new(ConnectionPool::new()),
+            liminal,
+        }
+    }
+
+    /// Создать с кастомной liminal конфигурацией
+    pub fn with_liminal_config(
+        gate: Gate,
+        sense: Sense,
+        align: Align,
+        memory: Arc<Memory>,
+        upstreams: Arc<Vec<UpstreamState>>,
+        liminal_config: LiminalConfig,
+    ) -> Self {
+        let liminal = Arc::new(LiminalOrchestrator::new(liminal_config));
+
+        Self {
+            gate: Arc::new(gate),
+            sense: Arc::new(sense),
+            align: Arc::new(align),
+            memory,
+            upstreams,
+            pool: Arc::new(ConnectionPool::new()),
+            liminal,
         }
     }
 
@@ -237,6 +268,37 @@ impl DaoServer {
                     upstream.name, route.name
                 );
 
+                // Shadow Traffic — дублирование запроса если настроено
+                // ПРИМЕЧАНИЕ: Для полной реализации нужно клонировать body запроса,
+                // что требует buffering. Пока оставляем как placeholder.
+                if let Some(shadow) = self.liminal.shadow() {
+                    if shadow.should_shadow() {
+                        debug!("Request selected for shadow traffic");
+                        // TODO: Клонирование и отправка теневого запроса
+                        // требует buffering тела запроса
+                    }
+                }
+
+                // Quantum Routing — при высоком уровне consciousness
+                // запускаем hedged request к нескольким upstreams
+                let use_quantum = if let Some(quantum) = self.liminal.quantum() {
+                    let consciousness = self.liminal.consciousness().current_level();
+                    // Используем quantum только при Vigilant или Transcendent
+                    matches!(
+                        consciousness,
+                        dao_core::liminal::consciousness::ConsciousnessLevel::Vigilant
+                            | dao_core::liminal::consciousness::ConsciousnessLevel::Transcendent
+                    ) && quantum.should_quantum_route(route_upstreams.len())
+                } else {
+                    false
+                };
+
+                if use_quantum {
+                    info!("Using quantum routing for request");
+                    // TODO: Реализация quantum routing с multiple concurrent requests
+                    // Требует клонирования запроса и race между несколькими upstreams
+                }
+
                 // Проксирование к upstream
                 match self.proxy_to_upstream(&upstream, req).await {
                     Ok((response, latency)) => {
@@ -244,6 +306,29 @@ impl DaoServer {
                         upstream.record_request(latency, success);
                         self.sense
                             .record_upstream_request(&upstream.name, latency, success);
+
+                        // Echo Analysis — записываем эхо запроса
+                        if let Some(echo_analyzer) = self.liminal.echo() {
+                            let echo = RequestEcho {
+                                path_hash: self.hash_path(&route.name),
+                                method: "GET".to_string(), // TODO: извлечь реальный метод
+                                status: response.status().as_u16(),
+                                latency_ms: latency.as_millis() as f64,
+                                response_size: 0, // TODO: измерить размер
+                                timestamp: Instant::now(),
+                            };
+
+                            // Проверка на аномальность перед записью
+                            let is_anomaly = echo_analyzer.is_anomaly(&echo);
+                            if is_anomaly {
+                                warn!("Anomaly detected in request to {}", route.name);
+                            }
+
+                            echo_analyzer.record_echo(echo);
+                        }
+
+                        // Обновление consciousness level на основе метрик
+                        self.update_consciousness_level();
 
                         // Конвертация Response<Incoming> в Response<BoxBody>
                         let (parts, body) = response.into_parts();
@@ -300,5 +385,61 @@ impl DaoServer {
                 dao_core::DaoError::Internal(format!("Failed to build response: {}", e))
             })?;
         Ok(response)
+    }
+
+    /// Хеширование пути для echo analysis
+    fn hash_path(&self, path: &str) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Обновление уровня осознанности
+    fn update_consciousness_level(&self) {
+        use dao_core::liminal::consciousness::AwarenessFactors;
+
+        // Собираем агрегированные метрики со всех upstream'ов
+        let mut total_rps = 0.0;
+        let mut total_errors = 0;
+        let mut total_requests = 0;
+        let mut max_p95_latency: f64 = 0.0;
+
+        for upstream in self.upstreams.iter() {
+            let stats = upstream.get_stats();
+            total_rps += stats.current_rps();
+            total_errors += stats.error_count;
+            total_requests += stats.success_count + stats.error_count;
+            max_p95_latency = max_p95_latency.max(stats.p95_latency_ms());
+        }
+
+        let error_rate = if total_requests > 0 {
+            total_errors as f64 / total_requests as f64
+        } else {
+            0.0
+        };
+
+        // Базовая нагрузка (можно брать из истории)
+        let baseline_rps = 100.0;
+
+        // Подсчёт аномалий
+        let anomaly_count = if let Some(_echo) = self.liminal.echo() {
+            // TODO: хранить счётчик аномалий в EchoAnalyzer
+            0
+        } else {
+            0
+        };
+
+        let factors = AwarenessFactors {
+            current_rps: total_rps,
+            baseline_rps,
+            error_rate,
+            p95_latency_ms: max_p95_latency,
+            anomaly_count,
+        };
+
+        self.liminal.consciousness().update_level(&factors);
     }
 }

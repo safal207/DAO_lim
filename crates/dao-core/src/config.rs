@@ -52,6 +52,8 @@ pub struct ServerConfig {
     pub tls_key: Option<String>,
     #[serde(default = "default_workers")]
     pub workers: usize,
+    /// Bind-адрес admin API (daoctl). Например: "127.0.0.1:9103"
+    pub admin_bind: Option<String>,
 }
 
 fn default_workers() -> usize {

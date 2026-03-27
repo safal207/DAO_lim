@@ -3,7 +3,7 @@
 //! Лиминальный reverse-proxy с осознанной маршрутизацией
 
 use clap::Parser;
-use dao_admin::Admin;
+use dao_admin::{Admin, AdminState, start_admin_api};
 use dao_core::{
     align::Align,
     config::DaoConfig,
@@ -129,6 +129,22 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // Запуск Admin API (daoctl)
+    if let Some(ref admin_bind) = config.server.admin_bind {
+        let admin_addr: std::net::SocketAddr = admin_bind.parse()?;
+        let admin_state = AdminState {
+            upstreams: upstreams.clone(),
+            memory: memory.clone(),
+            sense: Arc::new(sense.clone()),
+            align: Arc::new(align.clone()),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = start_admin_api(admin_addr, admin_state).await {
+                error!("Admin API failed: {}", e);
+            }
+        });
+    }
 
     // Создание и запуск сервера
     let server = DaoServer::new(gate, sense, align, memory, upstreams);

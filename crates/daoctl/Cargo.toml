@@ -1,21 +1,24 @@
 [package]
-name = "dao-admin"
+name = "daoctl"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "CLI для управления и отладки DAO — Dynamic Awareness Orchestrator"
+
+[[bin]]
+name = "daoctl"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { workspace = true }
-notify = { workspace = true }
-tracing = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-parking_lot = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+http = { workspace = true }
 
 dao-core = { path = "../dao-core" }

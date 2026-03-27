@@ -8,6 +8,7 @@
 
 use crate::{Intent, Result, upstream::UpstreamState};
 use crate::sense::Sense;
+use crate::explain::{CandidateScore, ExplainResult, PolicyWeightsInfo, ScoreComponents};
 use std::sync::Arc;
 
 pub mod policy;
@@ -17,6 +18,7 @@ pub use policy::{Policy, PolicyWeights};
 pub use selector::UpstreamSelector;
 
 /// Align — система принятия решений
+#[derive(Clone)]
 pub struct Align {
     sense: Sense,
     policies: PolicyRegistry,
@@ -86,9 +88,101 @@ impl Align {
         // Возврат лучшего upstream
         scored_upstreams.first().map(|(u, _)| u.clone())
     }
+
+    /// Выбор upstream с полным объяснением решения
+    pub fn explain_selection(
+        &self,
+        route_name: &str,
+        policy_name: &str,
+        upstreams: &[Arc<UpstreamState>],
+        request_intent: Option<&Intent>,
+    ) -> ExplainResult {
+        let default_weights = PolicyWeights::default();
+        let weights = self.policies.get(policy_name).unwrap_or(&default_weights);
+
+        let metrics = self.sense.get_resonance_metrics();
+
+        let mut candidates: Vec<CandidateScore> = upstreams
+            .iter()
+            .map(|upstream| {
+                let resonance = metrics
+                    .iter()
+                    .find(|m| m.upstream_name == upstream.name)
+                    .map(|m| m.load_resonance)
+                    .unwrap_or(0.0);
+
+                let intent_gap = if let Some(req_intent) = request_intent {
+                    upstream.intent_gap(req_intent)
+                } else {
+                    0.0
+                };
+
+                let tempo_spike = metrics
+                    .iter()
+                    .find(|m| m.upstream_name == upstream.name)
+                    .map(|m| m.tempo_spikiness)
+                    .unwrap_or(0.0);
+
+                let load_component = weights.w_load * resonance;
+                let intent_component = weights.w_intent * intent_gap;
+                let tempo_component = weights.w_tempo * tempo_spike;
+                let total_score = load_component + intent_component + tempo_component;
+
+                let stats = upstream.get_stats();
+
+                CandidateScore {
+                    name: upstream.name.clone(),
+                    url: upstream.url.clone(),
+                    total_score,
+                    load_resonance: resonance,
+                    intent_gap,
+                    tempo_spikiness: tempo_spike,
+                    p95_latency_ms: stats.p95_latency_ms(),
+                    error_rate: stats.error_rate(),
+                    current_rps: stats.current_rps(),
+                    components: ScoreComponents {
+                        load_component,
+                        intent_component,
+                        tempo_component,
+                    },
+                    winner: false,
+                }
+            })
+            .collect();
+
+        // Сортировка по score (меньше = лучше)
+        candidates.sort_by(|a, b| {
+            a.total_score
+                .partial_cmp(&b.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Отметить победителя
+        let selected = candidates.first().map(|c| {
+            c.name.clone()
+        });
+        if let Some(first) = candidates.first_mut() {
+            first.winner = true;
+        }
+
+        ExplainResult {
+            selected,
+            route: route_name.to_string(),
+            policy: policy_name.to_string(),
+            request_intent: request_intent.map(|i| i.0.clone()),
+            weights: PolicyWeightsInfo {
+                w_load: weights.w_load,
+                w_intent: weights.w_intent,
+                w_tempo: weights.w_tempo,
+            },
+            candidates,
+            no_route: false,
+        }
+    }
 }
 
 /// Реестр политик
+#[derive(Clone)]
 struct PolicyRegistry {
     policies: std::collections::HashMap<String, PolicyWeights>,
 }

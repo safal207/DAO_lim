@@ -7,6 +7,7 @@ bind = "0.0.0.0:8443"
 # tls_cert = "certs/dao.crt"
 # tls_key  = "certs/dao.key"
 workers = 4
+admin_bind = "127.0.0.1:9103"  # daoctl admin API
 
 [telemetry]
 prometheus_bind = "0.0.0.0:9102"

@@ -5,6 +5,7 @@ members = [
     "crates/dao-filters",
     "crates/dao-telemetry",
     "crates/dao-admin",
+    "crates/daoctl",
 ]
 resolver = "2"
 

@@ -18,6 +18,7 @@ pub mod memory;
 pub mod config;
 pub mod upstream;
 pub mod error;
+pub mod explain;
 
 pub use error::{DaoError, Result};
 

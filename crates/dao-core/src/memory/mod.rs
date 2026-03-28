@@ -124,6 +124,7 @@ mod tests {
                 tls_cert: None,
                 tls_key: None,
                 workers: 1,
+                admin_bind: None,
             },
             telemetry: None,
             routes: RoutesConfig {

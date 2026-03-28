@@ -44,5 +44,9 @@ workspace = true
 [dependencies.http]
 workspace = true
 
-[dependencies.pin-project]
-workspace = true
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+dao-core = { path = "../dao-core" }
+dao-admin = { path = "../dao-admin" }

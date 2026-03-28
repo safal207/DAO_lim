@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dao_core::explain::{CandidateScore, ExplainResult, UpstreamsResponse};
+use dao_core::explain::{CandidateScore, CanaryResponse, ExplainResult, UpstreamsResponse};
 
 #[derive(Parser, Debug)]
 #[command(name = "daoctl")]
@@ -54,6 +54,13 @@ enum Command {
         json: bool,
     },
 
+    /// Показать canary-раскладку трафика
+    Canary {
+        /// Вывести сырой JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Проверить доступность DAO
     Health,
 }
@@ -68,6 +75,9 @@ async fn main() -> Result<()> {
         }
         Command::Upstreams { json } => {
             cmd_upstreams(&cli.server, json).await?;
+        }
+        Command::Canary { json } => {
+            cmd_canary(&cli.server, json).await?;
         }
         Command::Health => {
             cmd_health(&cli.server).await?;
@@ -233,6 +243,75 @@ async fn cmd_upstreams(server: &str, raw_json: bool) -> Result<()> {
         );
         println!("    {} {} | load_resonance={:.4}  tempo_spikiness={:.4}",
             dim("└"), dim(&u.url), u.load_resonance, u.tempo_spikiness);
+    }
+    println!();
+
+    Ok(())
+}
+
+// ── canary ────────────────────────────────────────────────────────────────────
+
+async fn cmd_canary(server: &str, raw_json: bool) -> Result<()> {
+    let url = format!("{}/admin/canary", server);
+    let body = get_json(&url).await?;
+
+    if raw_json {
+        println!("{}", body);
+        return Ok(());
+    }
+
+    let resp: CanaryResponse = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("Failed to parse: {}\nBody: {}", e, body))?;
+
+    if resp.routes.is_empty() {
+        println!("\n  {} Нет маршрутов с policy=\"canary\"\n", dim("·"));
+        println!("  Добавьте в dao.toml:");
+        println!("    {}", dim("[[routes.rule]]"));
+        println!("    {}", dim("policy = \"canary\""));
+        println!();
+        return Ok(());
+    }
+
+    for route in &resp.routes {
+        println!();
+        println!("  {} Route: {}  (всего запросов: {})",
+            bold("◆"), bold(&route.route), route.total_requests);
+        println!();
+        println!("  {:<22} {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {}",
+            bold("UPSTREAM"), "weight%", "actual%", "p95ms", "err%", "reqs", "circuit");
+        println!("  {}", "─".repeat(82));
+
+        for u in &route.upstreams {
+            let circuit_label = match u.circuit.label() {
+                "closed"    => green("closed"),
+                "open"      => red("open ⚡"),
+                "half_open" => yellow("half_open"),
+                other       => dim(other),
+            };
+
+            let actual_marker = if (u.requests_pct - u.weight_pct).abs() > 5.0 {
+                yellow("!")
+            } else {
+                dim(" ")
+            };
+
+            println!(
+                "  {} {:<20} {:>7.1}%  {:>7.1}%  {:>8.1}  {:>7.1}%  {:>8}  {}",
+                actual_marker,
+                u.name,
+                u.weight_pct,
+                u.requests_pct,
+                u.p95_latency_ms,
+                u.error_rate * 100.0,
+                u.requests_total,
+                circuit_label,
+            );
+        }
+
+        println!();
+        println!("  {} weight% = конфигурированная доля трафика", dim("·"));
+        println!("  {} actual% = фактическая доля по счётчикам", dim("·"));
+        println!("  {} {} — отклонение actual% от weight% > 5pp", yellow("!"), dim("маркер"));
     }
     println!();
 

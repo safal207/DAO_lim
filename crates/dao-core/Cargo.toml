@@ -39,6 +39,8 @@ chrono = { workspace = true }
 hdrhistogram = { workspace = true }
 
 num_cpus = "1.16"
+rand = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+serde_json = { workspace = true }

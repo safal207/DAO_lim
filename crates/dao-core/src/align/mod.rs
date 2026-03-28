@@ -6,9 +6,9 @@
 //! - Canary routing
 //! - A/B testing
 
-use crate::{Intent, Result, upstream::UpstreamState};
+use crate::{Intent, upstream::UpstreamState};
 use crate::sense::Sense;
-use crate::explain::{CandidateScore, ExplainResult, PolicyWeightsInfo, ScoreComponents};
+use crate::explain::{CandidateScore, CanaryInfo, ExplainResult, PolicyWeightsInfo, ScoreComponents};
 use std::sync::Arc;
 
 pub mod policy;
@@ -44,6 +44,11 @@ impl Align {
         upstreams: &[Arc<UpstreamState>],
         request_intent: Option<&Intent>,
     ) -> Option<Arc<UpstreamState>> {
+        // Canary — отдельная ветка: взвешенный случайный выбор
+        if policy_name == "canary" {
+            return self.select_canary(upstreams);
+        }
+
         let default_weights = PolicyWeights::default();
         let weights = self.policies.get(policy_name)
             .unwrap_or(&default_weights);
@@ -92,6 +97,51 @@ impl Align {
 
         // Возврат лучшего upstream
         scored_upstreams.first().map(|(u, _)| u.clone())
+    }
+
+    /// Выбор upstream через canary (взвешенный случайный)
+    pub fn select_canary(&self, upstreams: &[Arc<UpstreamState>]) -> Option<Arc<UpstreamState>> {
+        canary_select(upstreams)
+    }
+
+    /// Explain для canary policy
+    pub fn explain_canary(
+        &self,
+        route_name: &str,
+        upstreams: &[Arc<UpstreamState>],
+    ) -> CanaryInfo {
+        let total_weight: u32 = upstreams.iter().map(|u| u.weight).sum();
+        let stats: Vec<_> = upstreams.iter().map(|u| {
+            let s = u.get_stats();
+            let total_reqs = s.success_count + s.error_count;
+            let weight_pct = if total_weight > 0 {
+                u.weight as f64 / total_weight as f64 * 100.0
+            } else { 0.0 };
+            crate::explain::CanaryUpstreamStat {
+                name: u.name.clone(),
+                url: u.url.clone(),
+                weight: u.weight,
+                weight_pct,
+                requests_total: total_reqs,
+                requests_pct: 0.0, // вычисляется ниже
+                error_rate: s.error_rate(),
+                p95_latency_ms: s.p95_latency_ms(),
+                circuit: u.circuit_status(),
+            }
+        }).collect();
+
+        let grand_total: u64 = stats.iter().map(|s| s.requests_total).sum();
+        let upstreams_with_pct = stats.into_iter().map(|mut s| {
+            s.requests_pct = if grand_total > 0 {
+                s.requests_total as f64 / grand_total as f64 * 100.0
+            } else { 0.0 };
+            s
+        }).collect();
+
+        CanaryInfo {
+            policy: route_name.to_string(),
+            upstreams: upstreams_with_pct,
+        }
     }
 
     /// Выбор upstream с полным объяснением решения
@@ -204,6 +254,38 @@ impl Align {
             no_route: false,
         }
     }
+}
+
+/// Взвешенный случайный выбор upstream (canary policy).
+/// Upstreams с открытым circuit исключаются автоматически.
+/// Если все circuit открыты — используем всех как fallback.
+pub fn canary_select(upstreams: &[Arc<UpstreamState>]) -> Option<Arc<UpstreamState>> {
+    use rand::Rng;
+
+    if upstreams.is_empty() {
+        return None;
+    }
+
+    let available: Vec<_> = upstreams.iter().filter(|u| u.is_available()).collect();
+    let pool: Vec<_> = if available.is_empty() {
+        upstreams.iter().collect()
+    } else {
+        available
+    };
+
+    let total_weight: u32 = pool.iter().map(|u| u.weight).sum();
+    if total_weight == 0 {
+        return pool.first().map(|u| (*u).clone());
+    }
+
+    let mut pick = rand::thread_rng().gen_range(0..total_weight);
+    for upstream in &pool {
+        if pick < upstream.weight {
+            return Some((*upstream).clone());
+        }
+        pick -= upstream.weight;
+    }
+    pool.last().map(|u| (*u).clone())
 }
 
 /// Реестр политик

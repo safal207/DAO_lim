@@ -109,3 +109,37 @@ pub struct UpstreamInfo {
 pub struct UpstreamsResponse {
     pub upstreams: Vec<UpstreamInfo>,
 }
+
+/// Статистика одного upstream для canary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanaryUpstreamStat {
+    pub name: String,
+    pub url: String,
+    pub weight: u32,
+    pub weight_pct: f64,
+    pub requests_total: u64,
+    pub requests_pct: f64,
+    pub error_rate: f64,
+    pub p95_latency_ms: f64,
+    pub circuit: CircuitStatus,
+}
+
+/// Информация о canary для explain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanaryInfo {
+    pub policy: String, // "canary"
+    pub upstreams: Vec<CanaryUpstreamStat>,
+}
+
+/// Ответ /admin/canary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanaryResponse {
+    pub routes: Vec<CanaryRouteInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanaryRouteInfo {
+    pub route: String,
+    pub upstreams: Vec<CanaryUpstreamStat>,
+    pub total_requests: u64,
+}

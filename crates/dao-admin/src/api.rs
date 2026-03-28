@@ -7,7 +7,10 @@
 
 use dao_core::{
     align::Align,
-    explain::{ExplainRequest, ExplainResult, PolicyWeightsInfo, UpstreamInfo, UpstreamsResponse},
+    explain::{
+        CanaryResponse, CanaryRouteInfo, CanaryUpstreamStat, ExplainRequest,
+        ExplainResult, PolicyWeightsInfo, UpstreamInfo, UpstreamsResponse,
+    },
     memory::Memory,
     sense::Sense,
     upstream::UpstreamState,
@@ -41,8 +44,9 @@ pub async fn handle_admin(
 
     let response = match path.as_str() {
         "/admin/upstreams" => handle_upstreams(&state),
-        "/admin/explain" => handle_explain(&state, &query),
-        "/admin/health" => json_ok(&serde_json::json!({"status": "ok", "version": dao_core::DAO_VERSION})),
+        "/admin/explain"   => handle_explain(&state, &query),
+        "/admin/canary"    => handle_canary(&state),
+        "/admin/health"    => json_ok(&serde_json::json!({"status": "ok", "version": dao_core::DAO_VERSION})),
         _ => json_err(StatusCode::NOT_FOUND, "endpoint not found"),
     };
 
@@ -75,6 +79,69 @@ fn handle_upstreams(state: &AdminState) -> Response<Full<Bytes>> {
         .collect();
 
     json_ok(&UpstreamsResponse { upstreams })
+}
+
+fn handle_canary(state: &AdminState) -> Response<Full<Bytes>> {
+    let config = state.memory.get_config();
+
+    let routes: Vec<CanaryRouteInfo> = config
+        .routes
+        .rule
+        .iter()
+        .filter(|r| r.policy == "canary")
+        .map(|route| {
+            let route_upstreams: Vec<_> = route
+                .upstreams
+                .iter()
+                .filter_map(|uc| state.upstreams.iter().find(|u| u.name == uc.name))
+                .collect();
+
+            let total_weight: u32 = route_upstreams.iter().map(|u| u.weight).sum();
+            let upstreams_stats: Vec<_> = route_upstreams
+                .iter()
+                .map(|u| {
+                    let s = u.get_stats();
+                    let total_reqs = s.success_count + s.error_count;
+                    CanaryUpstreamStat {
+                        name: u.name.clone(),
+                        url: u.url.clone(),
+                        weight: u.weight,
+                        weight_pct: if total_weight > 0 {
+                            u.weight as f64 / total_weight as f64 * 100.0
+                        } else {
+                            0.0
+                        },
+                        requests_total: total_reqs,
+                        requests_pct: 0.0, // заполняем ниже
+                        error_rate: s.error_rate(),
+                        p95_latency_ms: s.p95_latency_ms(),
+                        circuit: u.circuit_status(),
+                    }
+                })
+                .collect();
+
+            let grand_total: u64 = upstreams_stats.iter().map(|s| s.requests_total).sum();
+            let upstreams_final = upstreams_stats
+                .into_iter()
+                .map(|mut s| {
+                    s.requests_pct = if grand_total > 0 {
+                        s.requests_total as f64 / grand_total as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    s
+                })
+                .collect();
+
+            CanaryRouteInfo {
+                route: route.name.clone(),
+                upstreams: upstreams_final,
+                total_requests: grand_total,
+            }
+        })
+        .collect();
+
+    json_ok(&CanaryResponse { routes })
 }
 
 fn handle_explain(state: &AdminState, query: &str) -> Response<Full<Bytes>> {

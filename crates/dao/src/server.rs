@@ -2,6 +2,7 @@
 
 use dao_core::{
     align::Align,
+    flow::RateLimiterMap,
     gate::{Connection, Gate, Protocol},
     memory::Memory,
     sense::Sense,
@@ -32,6 +33,7 @@ pub struct DaoServer {
     memory: Arc<Memory>,
     upstreams: Arc<Vec<UpstreamState>>,
     pool: Arc<ConnectionPool>,
+    rate_limiter: RateLimiterMap,
 }
 
 /// Состояние для WebSocket handler (клонируется в spawn)
@@ -113,6 +115,7 @@ impl DaoServer {
         align: Align,
         memory: Arc<Memory>,
         upstreams: Arc<Vec<UpstreamState>>,
+        rate_limiter: RateLimiterMap,
     ) -> Self {
         Self {
             gate: Arc::new(gate),
@@ -121,28 +124,64 @@ impl DaoServer {
             memory,
             upstreams,
             pool: Arc::new(ConnectionPool::new()),
+            rate_limiter,
         }
     }
 
-    /// Запуск сервера
-    pub async fn run(self) -> anyhow::Result<()> {
+    /// Запуск сервера с поддержкой graceful shutdown.
+    ///
+    /// Принимает соединения до получения сигнала завершения.
+    /// После сигнала перестаёт принимать новые соединения и ждёт
+    /// завершения активных (не более `drain_timeout_secs`).
+    pub async fn run(self, shutdown: tokio::sync::broadcast::Receiver<()>) -> anyhow::Result<()> {
         let self_arc = Arc::new(self);
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut shutdown = shutdown;
 
         loop {
-            match self_arc.gate.accept().await {
-                Ok(conn) => {
-                    let server = self_arc.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = server.handle_connection(conn).await {
-                            error!("Connection error: {}", e);
+            tokio::select! {
+                result = self_arc.gate.accept() => {
+                    match result {
+                        Ok(conn) => {
+                            let server = self_arc.clone();
+                            let active = active.clone();
+                            active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            tokio::spawn(async move {
+                                if let Err(e) = server.handle_connection(conn).await {
+                                    error!("Connection error: {}", e);
+                                }
+                                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                            });
                         }
-                    });
+                        Err(e) => {
+                            error!("Accept error: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Accept error: {}", e);
+                _ = shutdown.recv() => {
+                    break;
                 }
             }
         }
+
+        // Drain: ждём завершения активных соединений (max 30 секунд)
+        const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        let drain_start = std::time::Instant::now();
+
+        loop {
+            let n = active.load(std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                break;
+            }
+            if drain_start.elapsed() >= DRAIN_TIMEOUT {
+                warn!("Drain timeout: {} connections still active, forcing exit", n);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        info!("Graceful shutdown complete");
+        Ok(())
     }
 
     /// Обработка соединения
@@ -420,6 +459,16 @@ impl DaoServer {
         if let Some(route) = route {
             debug!(route = %route.name, "matched route");
             metrics::counter!("dao_requests_total", "route" => route.name.clone()).increment(1);
+
+            // Rate limiting: проверяем до выбора upstream (дешевле)
+            if !self.rate_limiter.check(&route.name) {
+                metrics::counter!(
+                    "dao_rate_limited_total",
+                    "route" => route.name.clone()
+                ).increment(1);
+                warn!(route = %route.name, "rate limit exceeded → 429");
+                return self.error_response(429, "Too Many Requests");
+            }
 
             // Получение upstream'ов для маршрута
             let route_upstreams: Vec<_> = route

@@ -7,6 +7,7 @@ use dao_admin::{Admin, AdminState, start_admin_api};
 use dao_core::{
     align::Align,
     config::DaoConfig,
+    flow::RateLimiterMap,
     gate::{Gate, GateConfig, TlsConfig},
     memory::Memory,
     sense::Sense,
@@ -15,7 +16,7 @@ use dao_core::{
 use dao_telemetry::{init_telemetry_with_otlp, register_dao_metrics, start_prometheus_exporter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod server;
 use server::DaoServer;
@@ -178,13 +179,58 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Rate limiter — строим из конфига
+    let rate_limiter = RateLimiterMap::new();
+    for route in &config.routes.rule {
+        if let Some(ref filters) = route.filters {
+            if let Some(rps) = filters.rate_limit_rps {
+                info!("Rate limit for '{}': {} rps", route.name, rps);
+                rate_limiter.configure(&route.name, rps);
+            }
+        }
+    }
+
+    // Канал shutdown для graceful drain
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Обработка SIGTERM и SIGINT
+    tokio::spawn(async move {
+        let sigterm = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                signal(SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler")
+                    .recv()
+                    .await;
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received, initiating graceful shutdown...");
+            }
+            _ = sigterm => {
+                info!("SIGTERM received, initiating graceful shutdown...");
+            }
+        }
+
+        if shutdown_tx.send(()).is_err() {
+            warn!("Failed to send shutdown signal (receiver dropped)");
+        }
+    });
+
     // Создание и запуск сервера
-    let server = DaoServer::new(gate, sense, align, memory, upstreams);
+    let server = DaoServer::new(gate, sense, align, memory, upstreams, rate_limiter);
 
     info!("DAO started successfully");
     info!("Dynamic Awareness Orchestrator — врата сознания открыты");
 
-    server.run().await?;
+    server.run(shutdown_rx).await?;
 
     Ok(())
 }

@@ -17,6 +17,9 @@ use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Instant;
+use opentelemetry::global;
+use opentelemetry::propagation::TextMapPropagator;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures::StreamExt;
 use tracing::{debug, error, info, info_span, warn, Instrument};
@@ -416,6 +419,7 @@ impl DaoServer {
 
         if let Some(route) = route {
             debug!(route = %route.name, "matched route");
+            metrics::counter!("dao_requests_total", "route" => route.name.clone()).increment(1);
 
             // Получение upstream'ов для маршрута
             let route_upstreams: Vec<_> = route
@@ -469,6 +473,18 @@ impl DaoServer {
                         self.sense
                             .record_upstream_request(&upstream.name, latency, success);
 
+                        // Prometheus метрики
+                        let status_str = response.status().as_u16().to_string();
+                        metrics::counter!(
+                            "dao_upstream_requests_total",
+                            "upstream" => upstream.name.clone(),
+                            "status" => status_str,
+                        ).increment(1);
+                        metrics::histogram!(
+                            "dao_upstream_latency_seconds",
+                            "upstream" => upstream.name.clone(),
+                        ).record(latency.as_secs_f64());
+
                         // Конвертация Response<Incoming> в Response<BoxBody>
                         let (parts, body) = response.into_parts();
                         let boxed_body = body.map_err(|e| hyper::Error::from(e)).boxed();
@@ -503,10 +519,11 @@ impl DaoServer {
     ) -> Result<(Response<Incoming>, std::time::Duration)> {
         let client = self.pool.get_client(&upstream.url);
 
-        // Конвертация запроса для проксирования
-        let (parts, body) = req.into_parts();
-        let new_req = Request::from_parts(parts, body);
+        // Разбираем запрос и инжектируем W3C TraceContext заголовки
+        let (mut parts, body) = req.into_parts();
+        inject_trace_context(&mut parts.headers);
 
+        let new_req = Request::from_parts(parts, body);
         client.proxy_request(&upstream.url, new_req).await
     }
 
@@ -524,4 +541,31 @@ impl DaoServer {
             })?;
         Ok(response)
     }
+}
+
+/// Инжектирует W3C TraceContext заголовки (`traceparent`, `tracestate`)
+/// в заголовки HTTP запроса из текущего tracing span.
+///
+/// Если OTLP не настроен — текущий span будет no-op и заголовки не добавятся.
+fn inject_trace_context(headers: &mut hyper::HeaderMap) {
+    // Получаем OTel контекст из текущего tracing span
+    let cx = tracing::Span::current().context();
+
+    // Injector для hyper HeaderMap
+    struct HeaderInjector<'a>(&'a mut hyper::HeaderMap);
+
+    impl<'a> opentelemetry::propagation::Injector for HeaderInjector<'a> {
+        fn set(&mut self, key: &str, value: String) {
+            if let (Ok(name), Ok(val)) = (
+                hyper::header::HeaderName::from_bytes(key.as_bytes()),
+                hyper::header::HeaderValue::from_str(&value),
+            ) {
+                self.0.insert(name, val);
+            }
+        }
+    }
+
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut HeaderInjector(headers));
+    });
 }

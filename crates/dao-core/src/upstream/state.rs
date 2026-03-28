@@ -90,6 +90,15 @@ impl UpstreamState {
         } else {
             self.circuit.record_failure();
         }
+
+        // Обновляем gauge состояния circuit breaker: 0=closed, 1=open, 2=half_open
+        let circuit_value: f64 = match self.circuit.status() {
+            super::circuit_breaker::CircuitStatus::Closed { .. }   => 0.0,
+            super::circuit_breaker::CircuitStatus::Open { .. }     => 1.0,
+            super::circuit_breaker::CircuitStatus::HalfOpen { .. } => 2.0,
+        };
+        metrics::gauge!("dao_circuit_state", "upstream" => self.name.clone())
+            .set(circuit_value);
     }
 
     /// Получение текущей статистики

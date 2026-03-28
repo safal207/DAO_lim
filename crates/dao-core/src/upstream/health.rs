@@ -82,6 +82,12 @@ pub fn spawn_health_checker(upstream: UpstreamState, config: HealthCheckConfig) 
             // Сохраняем результат для daoctl upstreams
             upstream.update_health(ok, latency_ms);
 
+            // Prometheus метрика: 1.0 = healthy, 0.0 = unhealthy
+            metrics::gauge!("dao_health_probe_status", "upstream" => upstream.name.clone())
+                .set(if ok { 1.0 } else { 0.0 });
+            metrics::histogram!("dao_health_probe_latency_seconds", "upstream" => upstream.name.clone())
+                .record(latency_ms / 1000.0);
+
             // Передаём результат в circuit breaker
             // При ошибке пишем нулевую задержку — важен только флаг success
             let record_latency = if ok {

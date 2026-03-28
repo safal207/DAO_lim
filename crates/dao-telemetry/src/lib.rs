@@ -22,6 +22,11 @@ pub use metrics::{DaoMetrics, MetricsCollector};
 ///
 /// Если `None` — запускается только console tracing без OTel export.
 pub fn init_telemetry_with_otlp(otlp_endpoint: Option<&str>) -> Result<()> {
+    // W3C TraceContext propagation — traceparent / tracestate headers
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
 

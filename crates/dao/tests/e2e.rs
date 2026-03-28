@@ -95,6 +95,7 @@ fn make_test_config(
                         },
                     ],
                     filters: None,
+                    retry_attempts: 0,
                 },
             ],
         },

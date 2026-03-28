@@ -84,6 +84,9 @@ pub struct RouteRule {
     pub intent: Option<String>,
     pub upstreams: Vec<UpstreamConfig>,
     pub filters: Option<FilterConfig>,
+    /// Сколько раз повторить запрос при ошибке upstream (0 = не повторять)
+    #[serde(default)]
+    pub retry_attempts: u32,
 }
 
 impl RouteRule {

@@ -1,40 +1,46 @@
 //! HTTP client для upstream соединений
 
 use crate::Result;
-use hyper::body::Incoming;
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response, Uri};
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use std::time::Instant;
 use tracing::{debug, error};
 
-/// HTTP client для проксирования запросов к upstreams
+/// HTTP client для проксирования запросов к upstreams.
+///
+/// Хранит два клиента:
+/// - `client_bytes` — для проксирования с буферизованным телом (`Full<Bytes>`);
+///   используется основным путём, поддерживает retry и Request-ID инжекцию.
 #[derive(Clone)]
 pub struct UpstreamClient {
-    client: Client<hyper_util::client::legacy::connect::HttpConnector, Incoming>,
+    client_bytes: Client<HttpConnector, Full<Bytes>>,
 }
 
 impl UpstreamClient {
-    /// Создание нового клиента
     pub fn new() -> Self {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        Self { client }
+        let client_bytes = Client::builder(TokioExecutor::new()).build_http::<Full<Bytes>>();
+        Self { client_bytes }
     }
 
-    /// Проксирование запроса к upstream
+    /// Проксирование запроса с буферизованным телом.
+    ///
+    /// Тело (`Full<Bytes>`) дёшево клонируется — позволяет retry без
+    /// повторного чтения входящего потока.
     pub async fn proxy_request(
         &self,
         upstream_url: &str,
-        mut req: Request<Incoming>,
+        mut req: Request<Full<Bytes>>,
     ) -> Result<(Response<Incoming>, std::time::Duration)> {
         let start = Instant::now();
 
-        // Парсинг upstream URL
         let upstream_uri: Uri = upstream_url
             .parse()
             .map_err(|e| crate::DaoError::Upstream(format!("Invalid upstream URL: {}", e)))?;
 
-        // Построение нового URI с upstream хостом
         let path_and_query = req
             .uri()
             .path_and_query()
@@ -55,15 +61,11 @@ impl UpstreamClient {
 
         debug!("Proxying request to: {}", new_uri);
 
-        // Обновление URI в запросе
         *req.uri_mut() = new_uri;
-
-        // Удаление hop-by-hop headers
         remove_hop_by_hop_headers(req.headers_mut());
 
-        // Отправка запроса
         let response = self
-            .client
+            .client_bytes
             .request(req)
             .await
             .map_err(|e| {
@@ -84,20 +86,17 @@ impl Default for UpstreamClient {
     }
 }
 
-/// Удаление hop-by-hop headers
+/// Удаление hop-by-hop headers (RFC 2616)
 fn remove_hop_by_hop_headers(headers: &mut http::HeaderMap) {
-    // Список hop-by-hop headers согласно RFC 2616
     let hop_by_hop = [
         http::header::CONNECTION,
         http::header::TRANSFER_ENCODING,
-        http::header::UPGRADE,
         http::HeaderName::from_static("keep-alive"),
         http::HeaderName::from_static("proxy-authenticate"),
         http::HeaderName::from_static("proxy-authorization"),
         http::HeaderName::from_static("te"),
         http::HeaderName::from_static("trailer"),
     ];
-
     for header in &hop_by_hop {
         headers.remove(header);
     }
@@ -109,7 +108,6 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = UpstreamClient::new();
-        assert!(true); // Базовая проверка создания
+        let _client = UpstreamClient::new();
     }
 }

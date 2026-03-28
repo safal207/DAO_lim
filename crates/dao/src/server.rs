@@ -9,7 +9,7 @@ use dao_core::{
     upstream::{ConnectionPool, UpstreamState},
     Result,
 };
-use http_body_util::{combinators::BoxBody, BodyExt, Empty};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
@@ -446,134 +446,174 @@ impl DaoServer {
         }
     }
 
-    /// Обработка запроса с маршрутизацией
+    /// Обработка запроса с маршрутизацией, retry и Request ID
     async fn process_request(&self, req: Request<Incoming>) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
         let config = self.memory.get_config();
 
-        // Поиск подходящего маршрута
-        let route = {
+        // Поиск маршрута ДО разбора тела (matches требует &Request<Incoming>)
+        let route_idx = {
             let _span = info_span!("dao.route_match").entered();
-            config.routes.rule.iter().find(|r| r.match_rule.matches(&req))
+            config.routes.rule.iter().position(|r| r.match_rule.matches(&req))
         };
 
-        if let Some(route) = route {
-            debug!(route = %route.name, "matched route");
-            metrics::counter!("dao_requests_total", "route" => route.name.clone()).increment(1);
+        // Разбираем запрос: headers + буферизуем тело
+        let (req_parts, req_body) = req.into_parts();
+        let body_bytes = req_body.collect().await
+            .map(|c| c.to_bytes())
+            .unwrap_or_default();
 
-            // Rate limiting: проверяем до выбора upstream (дешевле)
-            if !self.rate_limiter.check(&route.name) {
-                metrics::counter!(
-                    "dao_rate_limited_total",
-                    "route" => route.name.clone()
-                ).increment(1);
-                warn!(route = %route.name, "rate limit exceeded → 429");
-                return self.error_response(429, "Too Many Requests");
-            }
+        // Извлекаем или генерируем Request ID
+        let request_id = req_parts.headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(generate_request_id);
 
-            // Получение upstream'ов для маршрута
-            let route_upstreams: Vec<_> = route
-                .upstreams
-                .iter()
-                .filter_map(|uc| {
-                    self.upstreams
-                        .iter()
-                        .find(|u| u.name == uc.name)
-                        .map(|u| Arc::new(u.clone()))
-                })
+        let Some(route) = route_idx.map(|i| &config.routes.rule[i]) else {
+            debug!(path = %req_parts.uri, "no route matched");
+            return self.error_response(404, "Not Found");
+        };
+
+        debug!(route = %route.name, "matched route");
+        metrics::counter!("dao_requests_total", "route" => route.name.clone()).increment(1);
+
+        // Rate limiting
+        if !self.rate_limiter.check(&route.name) {
+            metrics::counter!("dao_rate_limited_total", "route" => route.name.clone()).increment(1);
+            warn!(route = %route.name, "rate limit exceeded → 429");
+            return self.error_response(429, "Too Many Requests");
+        }
+
+        // Upstream кандидаты для маршрута
+        let route_upstreams: Vec<_> = route.upstreams.iter()
+            .filter_map(|uc| {
+                self.upstreams.iter().find(|u| u.name == uc.name).map(|u| Arc::new(u.clone()))
+            })
+            .collect();
+
+        if route_upstreams.is_empty() {
+            warn!(route = %route.name, "no upstreams configured");
+            return self.error_response(503, "Service Unavailable");
+        }
+
+        let request_intent = route.intent();
+        let max_retries = route.retry_attempts as usize;
+        let mut tried: Vec<String> = Vec::new();
+
+        // Retry loop: пробуем до max_retries+1 раз с разными upstream'ами
+        for attempt in 0..=max_retries {
+            // Кандидаты = ещё не опробованные
+            let candidates: Vec<_> = route_upstreams.iter()
+                .filter(|u| !tried.contains(&u.name))
+                .cloned()
                 .collect();
 
-            if route_upstreams.is_empty() {
-                warn!(route = %route.name, "no upstreams available");
-                return self.error_response(503, "Service Unavailable");
+            if candidates.is_empty() {
+                break;
             }
 
-            // Выбор upstream через Align
-            let request_intent = route.intent();
-            let selected = {
+            let upstream = {
                 let _span = info_span!(
                     "dao.upstream_select",
                     route = %route.name,
                     policy = %route.policy,
+                    attempt = attempt,
                 ).entered();
-                self.align.select_upstream(&route.policy, &route_upstreams, request_intent.as_ref())
+                self.align.select_upstream(&route.policy, &candidates, request_intent.as_ref())
             };
 
-            if let Some(upstream) = selected {
-                info!(
-                    route = %route.name,
+            let Some(upstream) = upstream else {
+                break;
+            };
+
+            tried.push(upstream.name.clone());
+
+            // Строим запрос для этой попытки (тело клонируется дёшево — Arc)
+            let attempt_req = build_attempt_request(
+                &req_parts,
+                body_bytes.clone(),
+                &request_id,
+            );
+
+            info!(
+                route = %route.name,
+                upstream = %upstream.name,
+                attempt = attempt,
+                "proxying request",
+            );
+
+            let proxy_result = self
+                .proxy_to_upstream(&upstream, attempt_req)
+                .instrument(info_span!(
+                    "dao.upstream_proxy",
                     upstream = %upstream.name,
-                    "upstream selected",
-                );
+                    upstream.url = %upstream.url,
+                    attempt = attempt,
+                ))
+                .await;
 
-                // Проксирование к upstream
-                let proxy_result = self
-                    .proxy_to_upstream(&upstream, req)
-                    .instrument(info_span!(
-                        "dao.upstream_proxy",
-                        upstream = %upstream.name,
-                        upstream.url = %upstream.url,
-                    ))
-                    .await;
+            match proxy_result {
+                Ok((response, latency)) => {
+                    let success = response.status().is_success()
+                        || response.status().as_u16() < 500;
 
-                match proxy_result {
-                    Ok((response, latency)) => {
-                        let success = response.status().is_success();
-                        upstream.record_request(latency, success);
-                        self.sense
-                            .record_upstream_request(&upstream.name, latency, success);
+                    upstream.record_request(latency, success);
+                    self.sense.record_upstream_request(&upstream.name, latency, success);
 
-                        // Prometheus метрики
-                        let status_str = response.status().as_u16().to_string();
-                        metrics::counter!(
-                            "dao_upstream_requests_total",
-                            "upstream" => upstream.name.clone(),
-                            "status" => status_str,
-                        ).increment(1);
-                        metrics::histogram!(
-                            "dao_upstream_latency_seconds",
-                            "upstream" => upstream.name.clone(),
-                        ).record(latency.as_secs_f64());
+                    let status_str = response.status().as_u16().to_string();
+                    metrics::counter!(
+                        "dao_upstream_requests_total",
+                        "upstream" => upstream.name.clone(),
+                        "status" => status_str,
+                    ).increment(1);
+                    metrics::histogram!(
+                        "dao_upstream_latency_seconds",
+                        "upstream" => upstream.name.clone(),
+                    ).record(latency.as_secs_f64());
 
-                        // Конвертация Response<Incoming> в Response<BoxBody>
-                        let (parts, body) = response.into_parts();
-                        let boxed_body = body.map_err(|e| hyper::Error::from(e)).boxed();
-                        Ok(Response::from_parts(parts, boxed_body))
-                    }
-                    Err(e) => {
-                        error!(upstream = %upstream.name, error = %e, "proxy failed");
-                        upstream.record_request(std::time::Duration::from_secs(0), false);
-                        self.sense.record_upstream_request(
-                            &upstream.name,
-                            std::time::Duration::from_secs(0),
-                            false,
+                    if !success && attempt < max_retries {
+                        warn!(
+                            upstream = %upstream.name,
+                            status = %response.status(),
+                            attempt = attempt,
+                            "upstream returned 5xx, retrying",
                         );
-                        self.error_response(502, "Bad Gateway")
+                        // Дренируем тело и пробуем следующий
+                        let _ = response.into_body().collect().await;
+                        continue;
                     }
+
+                    // Финальный ответ — добавляем X-Request-ID
+                    let (mut parts, body) = response.into_parts();
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(&request_id) {
+                        parts.headers.insert("x-request-id", val);
+                    }
+                    let boxed_body = body.map_err(|e| hyper::Error::from(e)).boxed();
+                    return Ok(Response::from_parts(parts, boxed_body));
                 }
-            } else {
-                warn!(route = %route.name, "no suitable upstream selected");
-                self.error_response(503, "Service Unavailable")
+                Err(e) => {
+                    upstream.record_request(std::time::Duration::ZERO, false);
+                    self.sense.record_upstream_request(&upstream.name, std::time::Duration::ZERO, false);
+                    if attempt < max_retries {
+                        warn!(upstream = %upstream.name, error = %e, attempt = attempt, "upstream error, retrying");
+                        continue;
+                    }
+                    error!(upstream = %upstream.name, error = %e, "all retries exhausted");
+                }
             }
-        } else {
-            debug!(path = %req.uri(), "no route matched");
-            self.error_response(404, "Not Found")
         }
+
+        self.error_response(502, "Bad Gateway")
     }
 
     /// Проксирование запроса к upstream
     async fn proxy_to_upstream(
         &self,
         upstream: &UpstreamState,
-        req: Request<Incoming>,
+        req: Request<Full<Bytes>>,
     ) -> Result<(Response<Incoming>, std::time::Duration)> {
         let client = self.pool.get_client(&upstream.url);
-
-        // Разбираем запрос и инжектируем W3C TraceContext заголовки
-        let (mut parts, body) = req.into_parts();
-        inject_trace_context(&mut parts.headers);
-
-        let new_req = Request::from_parts(parts, body);
-        client.proxy_request(&upstream.url, new_req).await
+        client.proxy_request(&upstream.url, req).await
     }
 
     /// Создание error response
@@ -590,6 +630,39 @@ impl DaoServer {
             })?;
         Ok(response)
     }
+}
+
+/// Строит Request<Full<Bytes>> для одной попытки проксирования.
+/// Клонирует parts (метод, URI, заголовки) и тело (Bytes — дёшево, Arc внутри).
+fn build_attempt_request(
+    orig_parts: &http::request::Parts,
+    body: Bytes,
+    request_id: &str,
+) -> Request<Full<Bytes>> {
+    let mut builder = Request::builder()
+        .method(orig_parts.method.clone())
+        .uri(orig_parts.uri.clone())
+        .version(orig_parts.version);
+
+    // Копируем все заголовки из оригинала
+    if let Some(headers) = builder.headers_mut() {
+        headers.extend(orig_parts.headers.clone());
+        // Инжектируем / перезаписываем X-Request-ID
+        if let Ok(val) = hyper::header::HeaderValue::from_str(request_id) {
+            headers.insert("x-request-id", val);
+        }
+        // W3C TraceContext
+        inject_trace_context(headers);
+    }
+
+    builder.body(Full::new(body)).expect("valid request")
+}
+
+/// Генерация уникального Request ID (32 hex символа)
+fn generate_request_id() -> String {
+    use rand::Rng;
+    let bytes: [u8; 16] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Инжектирует W3C TraceContext заголовки (`traceparent`, `tracestate`)

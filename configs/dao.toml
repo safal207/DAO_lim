@@ -24,6 +24,7 @@ prometheus_bind = "0.0.0.0:9102"
 name = "api-v1"
 policy = "resonant"
 intent = "realtime"
+retry_attempts = 1   # повторить 1 раз при 5xx или connect error
 
   [routes.rule.match]
   host = "api.example.com"

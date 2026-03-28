@@ -31,6 +31,7 @@ tracing-subscriber = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 metrics = { workspace = true }
+rand = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 

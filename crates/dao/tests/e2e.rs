@@ -135,6 +135,7 @@ async fn start_test_admin(
         memory,
         sense: Arc::new(sense),
         align: Arc::new(align),
+        config_path: std::path::PathBuf::from("configs/dao.toml"),
     };
 
     tokio::spawn(async move {

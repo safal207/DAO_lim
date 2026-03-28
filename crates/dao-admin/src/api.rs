@@ -32,6 +32,8 @@ pub struct AdminState {
     pub memory: Arc<Memory>,
     pub sense: Arc<Sense>,
     pub align: Arc<Align>,
+    /// Путь к файлу конфигурации (для ручного reload)
+    pub config_path: std::path::PathBuf,
 }
 
 /// Точка входа: роутинг запросов admin API
@@ -39,18 +41,34 @@ pub async fn handle_admin(
     req: Request<Incoming>,
     state: AdminState,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
-    let response = match path.as_str() {
-        "/admin/upstreams" => handle_upstreams(&state),
-        "/admin/explain"   => handle_explain(&state, &query),
-        "/admin/canary"    => handle_canary(&state),
-        "/admin/health"    => json_ok(&serde_json::json!({"status": "ok", "version": dao_core::DAO_VERSION})),
+    let response = match (method.as_str(), path.as_str()) {
+        ("GET",  "/admin/upstreams") => handle_upstreams(&state),
+        ("GET",  "/admin/explain")   => handle_explain(&state, &query),
+        ("GET",  "/admin/canary")    => handle_canary(&state),
+        ("GET",  "/admin/health")    => json_ok(&serde_json::json!({"status": "ok", "version": dao_core::DAO_VERSION})),
+        ("POST", "/admin/reload")    => handle_reload(&state),
         _ => json_err(StatusCode::NOT_FOUND, "endpoint not found"),
     };
 
     Ok(response)
+}
+
+fn handle_reload(state: &AdminState) -> Response<Full<Bytes>> {
+    use dao_core::config::DaoConfig;
+    match DaoConfig::from_file(&state.config_path) {
+        Ok(new_config) => match state.memory.update_config(new_config) {
+            Ok(_) => {
+                tracing::info!("Config reloaded via admin API");
+                json_ok(&serde_json::json!({"status": "ok", "message": "config reloaded"}))
+            }
+            Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Apply failed: {}", e)),
+        },
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Parse failed: {}", e)),
+    }
 }
 
 fn handle_upstreams(state: &AdminState) -> Response<Full<Bytes>> {

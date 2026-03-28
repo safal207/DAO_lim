@@ -63,6 +63,9 @@ enum Command {
 
     /// Проверить доступность DAO
     Health,
+
+    /// Перезагрузить конфигурацию без рестарта
+    Reload,
 }
 
 #[tokio::main]
@@ -81,6 +84,9 @@ async fn main() -> Result<()> {
         }
         Command::Health => {
             cmd_health(&cli.server).await?;
+        }
+        Command::Reload => {
+            cmd_reload(&cli.server).await?;
         }
     }
 
@@ -332,6 +338,25 @@ async fn cmd_canary(server: &str, raw_json: bool) -> Result<()> {
     Ok(())
 }
 
+// ── reload ────────────────────────────────────────────────────────────────────
+
+async fn cmd_reload(server: &str) -> Result<()> {
+    let url = format!("{}/admin/reload", server);
+    let body = post_json(&url).await?;
+    let val: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("Bad response: {}\nBody: {}", e, body))?;
+
+    let status = val["status"].as_str().unwrap_or("unknown");
+    if status == "ok" {
+        println!("{} Config reloaded successfully", green("✓"));
+    } else {
+        let msg = val["message"].as_str().unwrap_or(&body);
+        println!("{} Reload failed: {}", red("✗"), msg);
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 // ── health ────────────────────────────────────────────────────────────────────
 
 async fn cmd_health(server: &str) -> Result<()> {
@@ -374,6 +399,37 @@ async fn get_json(url: &str) -> Result<String> {
         .method("GET")
         .uri(path_and_query)
         .header("Host", host)
+        .body(http_body_util::Empty::<hyper::body::Bytes>::new())?;
+
+    let resp = sender.send_request(req).await?;
+    let bytes = resp.into_body().collect().await?.to_bytes();
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn post_json(url: &str) -> Result<String> {
+    use http_body_util::BodyExt;
+    use hyper::Request;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpStream;
+
+    let uri: http::Uri = url.parse()?;
+    let host = uri.host().ok_or_else(|| anyhow::anyhow!("No host in URL"))?;
+    let port = uri.port_u16().unwrap_or(80);
+    let addr = format!("{}:{}", host, port);
+
+    let stream = TcpStream::connect(&addr).await
+        .map_err(|e| anyhow::anyhow!("Cannot connect to {}: {}", addr, e))?;
+    let io = TokioIo::new(stream);
+
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+    tokio::spawn(async move { let _ = conn.await; });
+
+    let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let req = Request::builder()
+        .method("POST")
+        .uri(path_and_query)
+        .header("Host", host)
+        .header("Content-Length", "0")
         .body(http_body_util::Empty::<hyper::body::Bytes>::new())?;
 
     let resp = sender.send_request(req).await?;

@@ -171,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
             memory: memory.clone(),
             sense: Arc::new(sense.clone()),
             align: Arc::new(align.clone()),
+            config_path: args.config.clone(),
         };
         tokio::spawn(async move {
             if let Err(e) = start_admin_api(admin_addr, admin_state).await {

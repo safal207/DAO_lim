@@ -2,6 +2,7 @@
 
 use dao_core::{
     align::Align,
+    config::FilterConfig,
     flow::RateLimiterMap,
     gate::{Connection, Gate, Protocol},
     memory::Memory,
@@ -533,6 +534,7 @@ impl DaoServer {
                 &req_parts,
                 body_bytes.clone(),
                 &request_id,
+                route.filters.as_ref(),
             );
 
             info!(
@@ -583,13 +585,14 @@ impl DaoServer {
                         continue;
                     }
 
-                    // Финальный ответ — добавляем X-Request-ID
-                    let (mut parts, body) = response.into_parts();
+                    // Финальный ответ — добавляем заголовки из фильтров + X-Request-ID
+                    let (mut resp_parts, body) = response.into_parts();
+                    apply_response_filters(&mut resp_parts.headers, route.filters.as_ref());
                     if let Ok(val) = hyper::header::HeaderValue::from_str(&request_id) {
-                        parts.headers.insert("x-request-id", val);
+                        resp_parts.headers.insert("x-request-id", val);
                     }
                     let boxed_body = body.map_err(|e| hyper::Error::from(e)).boxed();
-                    return Ok(Response::from_parts(parts, boxed_body));
+                    return Ok(Response::from_parts(resp_parts, boxed_body));
                 }
                 Err(e) => {
                     upstream.record_request(std::time::Duration::ZERO, false);
@@ -634,28 +637,65 @@ impl DaoServer {
 
 /// Строит Request<Full<Bytes>> для одной попытки проксирования.
 /// Клонирует parts (метод, URI, заголовки) и тело (Bytes — дёшево, Arc внутри).
+/// Применяет request_headers_add/remove из FilterConfig.
 fn build_attempt_request(
     orig_parts: &http::request::Parts,
     body: Bytes,
     request_id: &str,
+    filters: Option<&FilterConfig>,
 ) -> Request<Full<Bytes>> {
     let mut builder = Request::builder()
         .method(orig_parts.method.clone())
         .uri(orig_parts.uri.clone())
         .version(orig_parts.version);
 
-    // Копируем все заголовки из оригинала
     if let Some(headers) = builder.headers_mut() {
+        // Копируем оригинальные заголовки
         headers.extend(orig_parts.headers.clone());
-        // Инжектируем / перезаписываем X-Request-ID
+
+        // Применяем request фильтры из конфига
+        if let Some(f) = filters {
+            if let Some(add) = &f.request_headers_add {
+                for (k, v) in add {
+                    if let (Ok(name), Ok(val)) = (
+                        hyper::header::HeaderName::from_bytes(k.as_bytes()),
+                        hyper::header::HeaderValue::from_str(v),
+                    ) {
+                        headers.insert(name, val);
+                    }
+                }
+            }
+            if let Some(remove) = &f.request_headers_remove {
+                for k in remove {
+                    if let Ok(name) = hyper::header::HeaderName::from_bytes(k.as_bytes()) {
+                        headers.remove(name);
+                    }
+                }
+            }
+        }
+
+        // X-Request-ID и W3C TraceContext
         if let Ok(val) = hyper::header::HeaderValue::from_str(request_id) {
             headers.insert("x-request-id", val);
         }
-        // W3C TraceContext
         inject_trace_context(headers);
     }
 
     builder.body(Full::new(body)).expect("valid request")
+}
+
+/// Применяет response_headers_add из FilterConfig к заголовкам ответа.
+fn apply_response_filters(headers: &mut hyper::HeaderMap, filters: Option<&FilterConfig>) {
+    let Some(f) = filters else { return };
+    let Some(add) = &f.response_headers_add else { return };
+    for (k, v) in add {
+        if let (Ok(name), Ok(val)) = (
+            hyper::header::HeaderName::from_bytes(k.as_bytes()),
+            hyper::header::HeaderValue::from_str(v),
+        ) {
+            headers.insert(name, val);
+        }
+    }
 }
 
 /// Генерация уникального Request ID (32 hex символа)

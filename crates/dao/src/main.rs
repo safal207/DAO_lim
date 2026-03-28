@@ -10,9 +10,9 @@ use dao_core::{
     gate::{Gate, GateConfig, TlsConfig},
     memory::Memory,
     sense::Sense,
-    upstream::UpstreamState,
+    upstream::{UpstreamState, HealthCheckConfig, spawn_health_checker},
 };
-use dao_telemetry::{init_telemetry, register_dao_metrics, start_prometheus_exporter};
+use dao_telemetry::{init_telemetry_with_otlp, register_dao_metrics, start_prometheus_exporter};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -37,8 +37,15 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Инициализация телеметрии
-    init_telemetry()?;
+    // Загрузка конфигурации нужна до init_telemetry для otlp_endpoint,
+    // но clap Args уже распарсены, поэтому читаем конфиг дважды
+    // (первый раз только для endpoint — это дёшево).
+    let otlp_endpoint = DaoConfig::from_file(&args.config)
+        .ok()
+        .and_then(|c| c.telemetry)
+        .and_then(|t| t.otlp_endpoint);
+
+    init_telemetry_with_otlp(otlp_endpoint.as_deref())?;
     register_dao_metrics();
 
     if args.verbose {
@@ -76,6 +83,24 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let upstreams = Arc::new(all_upstreams);
+
+    // Запуск активных health checkers для upstream'ов с настроенным health_check
+    for route in &config.routes.rule {
+        for upstream_cfg in &route.upstreams {
+            if let Some(ref hc) = upstream_cfg.health_check {
+                if let Some(upstream) = upstreams.iter().find(|u| u.name == upstream_cfg.name) {
+                    let hc_config = HealthCheckConfig {
+                        path: hc.path.clone(),
+                        interval_secs: hc.interval_secs,
+                        timeout_secs: hc.timeout_secs,
+                    };
+                    info!("Starting health checker for '{}' at {} every {}s",
+                        upstream.name, hc.path, hc.interval_secs);
+                    spawn_health_checker(upstream.clone(), hc_config);
+                }
+            }
+        }
+    }
 
     // Sense — телеметрия
     let sense = Sense::new(upstreams.clone());

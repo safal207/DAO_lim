@@ -102,6 +102,12 @@ pub struct UpstreamInfo {
     pub load_resonance: f64,
     pub tempo_spikiness: f64,
     pub circuit: CircuitStatus,
+    /// Результат последней активной пробы (None = health check не настроен)
+    pub health_ok: Option<bool>,
+    /// Задержка последней активной пробы в мс
+    pub health_latency_ms: Option<f64>,
+    /// Секунд с момента последней пробы (None = не запускалась)
+    pub health_age_secs: Option<u64>,
 }
 
 /// Ответ /admin/upstreams

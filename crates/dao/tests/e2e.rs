@@ -83,6 +83,7 @@ fn make_test_config(
                             intent: Some(vec!["realtime".to_string(), "low-latency".to_string()]),
                             weight: 2,
                             circuit_breaker: None,
+                            health_check: None,
                         },
                         UpstreamConfig {
                             name: "slow-model".to_string(),
@@ -90,6 +91,7 @@ fn make_test_config(
                             intent: Some(vec!["batch".to_string()]),
                             weight: 1,
                             circuit_breaker: None,
+                            health_check: None,
                         },
                     ],
                     filters: None,

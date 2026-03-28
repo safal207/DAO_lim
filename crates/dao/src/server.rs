@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures::StreamExt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 /// DAO Server
 pub struct DaoServer {
@@ -361,18 +361,31 @@ impl DaoServer {
         req: Request<Incoming>,
     ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
         let start = Instant::now();
-        let method = req.method().clone();
-        let uri = req.uri().clone();
+        let method = req.method().to_string();
+        let path = req.uri().path().to_string();
 
-        debug!("Handling request: {} {}", method, uri);
+        // OTel span для полного жизненного цикла запроса
+        let span = info_span!(
+            "dao.request",
+            http.method = %method,
+            http.target = %path,
+            http.status_code = tracing::field::Empty,
+            otel.kind = "SERVER",
+        );
 
-        match self.process_request(req).await {
+        let result = self.process_request(req).instrument(span.clone()).await;
+
+        match result {
             Ok(response) => {
-                let status = response.status();
+                let status = response.status().as_u16();
                 let latency = start.elapsed();
+                span.record("http.status_code", status);
                 debug!(
-                    "Request completed: {} {} -> {} in {:?}",
-                    method, uri, status, latency
+                    method = %method,
+                    path = %path,
+                    status = status,
+                    latency_ms = %format!("{:.1}", latency.as_secs_f64() * 1000.0),
+                    "request completed",
                 );
                 Ok(response)
             }
@@ -396,14 +409,13 @@ impl DaoServer {
         let config = self.memory.get_config();
 
         // Поиск подходящего маршрута
-        let route = config
-            .routes
-            .rule
-            .iter()
-            .find(|r| r.match_rule.matches(&req));
+        let route = {
+            let _span = info_span!("dao.route_match").entered();
+            config.routes.rule.iter().find(|r| r.match_rule.matches(&req))
+        };
 
         if let Some(route) = route {
-            debug!("Matched route: {}", route.name);
+            debug!(route = %route.name, "matched route");
 
             // Получение upstream'ов для маршрута
             let route_upstreams: Vec<_> = route
@@ -418,24 +430,39 @@ impl DaoServer {
                 .collect();
 
             if route_upstreams.is_empty() {
-                warn!("No upstreams available for route: {}", route.name);
+                warn!(route = %route.name, "no upstreams available");
                 return self.error_response(503, "Service Unavailable");
             }
 
             // Выбор upstream через Align
             let request_intent = route.intent();
-            let selected = self
-                .align
-                .select_upstream(&route.policy, &route_upstreams, request_intent.as_ref());
+            let selected = {
+                let _span = info_span!(
+                    "dao.upstream_select",
+                    route = %route.name,
+                    policy = %route.policy,
+                ).entered();
+                self.align.select_upstream(&route.policy, &route_upstreams, request_intent.as_ref())
+            };
 
             if let Some(upstream) = selected {
                 info!(
-                    "Selected upstream: {} for route: {}",
-                    upstream.name, route.name
+                    route = %route.name,
+                    upstream = %upstream.name,
+                    "upstream selected",
                 );
 
                 // Проксирование к upstream
-                match self.proxy_to_upstream(&upstream, req).await {
+                let proxy_result = self
+                    .proxy_to_upstream(&upstream, req)
+                    .instrument(info_span!(
+                        "dao.upstream_proxy",
+                        upstream = %upstream.name,
+                        upstream.url = %upstream.url,
+                    ))
+                    .await;
+
+                match proxy_result {
                     Ok((response, latency)) => {
                         let success = response.status().is_success();
                         upstream.record_request(latency, success);
@@ -448,7 +475,7 @@ impl DaoServer {
                         Ok(Response::from_parts(parts, boxed_body))
                     }
                     Err(e) => {
-                        error!("Proxy to upstream {} failed: {}", upstream.name, e);
+                        error!(upstream = %upstream.name, error = %e, "proxy failed");
                         upstream.record_request(std::time::Duration::from_secs(0), false);
                         self.sense.record_upstream_request(
                             &upstream.name,
@@ -459,12 +486,11 @@ impl DaoServer {
                     }
                 }
             } else {
-                warn!("No suitable upstream selected for route: {}", route.name);
+                warn!(route = %route.name, "no suitable upstream selected");
                 self.error_response(503, "Service Unavailable")
             }
         } else {
-            // Маршрут не найден
-            debug!("No route matched for: {}", req.uri());
+            debug!(path = %req.uri(), "no route matched");
             self.error_response(404, "Not Found")
         }
     }

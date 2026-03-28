@@ -64,6 +64,8 @@ fn default_workers() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     pub prometheus_bind: String,
+    /// OTLP gRPC endpoint для OpenTelemetry (например: "http://localhost:4317")
+    pub otlp_endpoint: Option<String>,
 }
 
 /// Конфигурация маршрутов
@@ -175,7 +177,24 @@ pub struct UpstreamConfig {
     pub weight: u32,
     /// Настройки circuit breaker (опционально)
     pub circuit_breaker: Option<CircuitBreakerConfig>,
+    /// Активная проверка доступности (опционально)
+    pub health_check: Option<HealthCheckConfigToml>,
 }
+
+/// Конфигурация активной проверки в TOML (зеркало upstream::HealthCheckConfig)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckConfigToml {
+    #[serde(default = "default_health_path")]
+    pub path: String,
+    #[serde(default = "default_health_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_health_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_health_path() -> String { "/health".to_string() }
+fn default_health_interval() -> u64 { 10 }
+fn default_health_timeout() -> u64 { 5 }
 
 fn default_weight() -> u32 {
     1

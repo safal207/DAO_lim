@@ -62,6 +62,15 @@ fn handle_upstreams(state: &AdminState) -> Response<Full<Bytes>> {
         .map(|u| {
             let stats = u.get_stats();
             let rm = resonance.iter().find(|m| m.upstream_name == u.name);
+            let health = u.get_health_status();
+            let (health_ok, health_latency_ms, health_age_secs) = match health {
+                Some(h) => (
+                    Some(h.healthy),
+                    Some(h.latency_ms),
+                    Some(h.checked_at.elapsed().as_secs()),
+                ),
+                None => (None, None, None),
+            };
             UpstreamInfo {
                 name: u.name.clone(),
                 url: u.url.clone(),
@@ -74,6 +83,9 @@ fn handle_upstreams(state: &AdminState) -> Response<Full<Bytes>> {
                 load_resonance: rm.map(|m| m.load_resonance).unwrap_or(0.0),
                 tempo_spikiness: rm.map(|m| m.tempo_spikiness).unwrap_or(0.0),
                 circuit: u.circuit_status(),
+                health_ok,
+                health_latency_ms,
+                health_age_secs,
             }
         })
         .collect();

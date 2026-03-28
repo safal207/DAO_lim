@@ -11,6 +11,7 @@ admin_bind = "127.0.0.1:9103"  # daoctl admin API
 
 [telemetry]
 prometheus_bind = "0.0.0.0:9102"
+# otlp_endpoint = "http://localhost:4317"  # OpenTelemetry OTLP gRPC export
 
 # ============================================================
 # Routes — Маршруты и правила
@@ -34,11 +35,21 @@ intent = "realtime"
   intent = ["realtime", "low-latency"]
   weight = 2
 
+    [routes.rule.upstreams.health_check]
+    path          = "/health"
+    interval_secs = 10
+    timeout_secs  = 5
+
   [[routes.rule.upstreams]]
   name = "api-backend-2"
   url  = "http://127.0.0.1:8082"
   intent = ["realtime"]
   weight = 1
+
+    [routes.rule.upstreams.health_check]
+    path          = "/health"
+    interval_secs = 10
+    timeout_secs  = 5
 
   [routes.rule.filters]
   request_headers_add = { "X-DAO-Gateway" = "true", "X-DAO-Version" = "0.1.0" }

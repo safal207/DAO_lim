@@ -222,7 +222,7 @@ async fn cmd_upstreams(server: &str, raw_json: bool) -> Result<()> {
 
     for u in &resp.upstreams {
         let err_pct = u.error_rate * 100.0;
-        let health = if err_pct > 10.0 {
+        let traffic_health = if err_pct > 10.0 {
             red("✗")
         } else if err_pct > 2.0 {
             yellow("!")
@@ -230,9 +230,22 @@ async fn cmd_upstreams(server: &str, raw_json: bool) -> Result<()> {
             green("✓")
         };
 
+        // Индикатор активной пробы
+        let probe_indicator = match u.health_ok {
+            Some(true)  => format!(" {}", green("probe:ok")),
+            Some(false) => format!(" {}", red("probe:fail")),
+            None        => String::new(),
+        };
+        let probe_latency = match (u.health_ok, u.health_latency_ms) {
+            (Some(_), Some(ms)) => format!(" ({:.0}ms", ms) +
+                u.health_age_secs.map(|s| format!(", {}s ago)", s))
+                    .unwrap_or_else(|| ")".to_string()).as_str(),
+            _ => String::new(),
+        };
+
         println!(
             "  {} {:<20} {:>8.1}  {:>8.1}  {:>6.1}%  {:>8.1}  {:>10}  {:>10}",
-            health,
+            traffic_health,
             u.name,
             u.p50_latency_ms,
             u.p95_latency_ms,
@@ -241,8 +254,9 @@ async fn cmd_upstreams(server: &str, raw_json: bool) -> Result<()> {
             u.success_count,
             u.error_count,
         );
-        println!("    {} {} | load_resonance={:.4}  tempo_spikiness={:.4}",
-            dim("└"), dim(&u.url), u.load_resonance, u.tempo_spikiness);
+        println!("    {} {} | load_resonance={:.4}  tempo_spikiness={:.4}{}{}",
+            dim("└"), dim(&u.url), u.load_resonance, u.tempo_spikiness,
+            probe_indicator, probe_latency);
     }
     println!();
 

@@ -7,6 +7,17 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Результат последней активной проверки доступности
+#[derive(Debug, Clone)]
+pub struct HealthProbeResult {
+    /// Upstream вернул ответ < 500
+    pub healthy: bool,
+    /// Время ответа в миллисекундах
+    pub latency_ms: f64,
+    /// Момент проверки
+    pub checked_at: Instant,
+}
+
 /// Состояние upstream сервера
 #[derive(Debug, Clone)]
 pub struct UpstreamState {
@@ -16,6 +27,8 @@ pub struct UpstreamState {
     pub weight: u32,
     pub stats: Arc<RwLock<UpstreamStats>>,
     pub circuit: Arc<CircuitBreaker>,
+    /// Последний результат активной проверки (None = не настроена)
+    pub last_health: Arc<RwLock<Option<HealthProbeResult>>>,
 }
 
 impl UpstreamState {
@@ -37,6 +50,7 @@ impl UpstreamState {
             weight,
             stats: Arc::new(RwLock::new(UpstreamStats::new())),
             circuit: Arc::new(CircuitBreaker::new(cb_config)),
+            last_health: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -81,6 +95,20 @@ impl UpstreamState {
     /// Получение текущей статистики
     pub fn get_stats(&self) -> UpstreamStats {
         self.stats.read().clone()
+    }
+
+    /// Последний результат активной проверки
+    pub fn get_health_status(&self) -> Option<HealthProbeResult> {
+        self.last_health.read().clone()
+    }
+
+    /// Обновление результата активной проверки (вызывается health checker'ом)
+    pub fn update_health(&self, healthy: bool, latency_ms: f64) {
+        *self.last_health.write() = Some(HealthProbeResult {
+            healthy,
+            latency_ms,
+            checked_at: Instant::now(),
+        });
     }
 }
 

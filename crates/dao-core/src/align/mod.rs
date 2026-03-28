@@ -51,7 +51,12 @@ impl Align {
         let metrics = self.sense.get_resonance_metrics();
 
         // Вычисление resonant score для каждого upstream
-        let mut scored_upstreams: Vec<_> = upstreams
+        // Упstreams с открытым circuit breaker исключаются, но если
+        // все открыты — используем всех (лучше попробовать, чем 503).
+        let available: Vec<_> = upstreams.iter().filter(|u| u.is_available()).cloned().collect();
+        let candidates = if available.is_empty() { upstreams.to_vec() } else { available };
+
+        let mut scored_upstreams: Vec<_> = candidates
             .iter()
             .map(|upstream| {
                 let resonance = metrics
@@ -102,9 +107,20 @@ impl Align {
 
         let metrics = self.sense.get_resonance_metrics();
 
+        // Все кандидаты — включая с открытым circuit (для отображения в explain)
+        let available_names: std::collections::HashSet<_> = upstreams
+            .iter()
+            .filter(|u| u.is_available())
+            .map(|u| u.name.clone())
+            .collect();
+        let has_available = !available_names.is_empty();
+
         let mut candidates: Vec<CandidateScore> = upstreams
             .iter()
             .map(|upstream| {
+                let circuit_status = upstream.circuit_status();
+                let circuit_open = has_available && !available_names.contains(&upstream.name);
+
                 let resonance = metrics
                     .iter()
                     .find(|m| m.upstream_name == upstream.name)
@@ -126,7 +142,12 @@ impl Align {
                 let load_component = weights.w_load * resonance;
                 let intent_component = weights.w_intent * intent_gap;
                 let tempo_component = weights.w_tempo * tempo_spike;
-                let total_score = load_component + intent_component + tempo_component;
+                // Открытый circuit получает бесконечный score — не может выиграть
+                let total_score = if circuit_open {
+                    f64::MAX
+                } else {
+                    load_component + intent_component + tempo_component
+                };
 
                 let stats = upstream.get_stats();
 
@@ -146,21 +167,25 @@ impl Align {
                         tempo_component,
                     },
                     winner: false,
+                    circuit: circuit_status,
+                    circuit_open,
                 }
             })
             .collect();
 
-        // Сортировка по score (меньше = лучше)
+        // Сортировка: open circuit последними, затем по score
         candidates.sort_by(|a, b| {
-            a.total_score
-                .partial_cmp(&b.total_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            match (a.circuit_open, b.circuit_open) {
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => a.total_score
+                    .partial_cmp(&b.total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            }
         });
 
-        // Отметить победителя
-        let selected = candidates.first().map(|c| {
-            c.name.clone()
-        });
+        // Отметить победителя (первый доступный)
+        let selected = candidates.first().map(|c| c.name.clone());
         if let Some(first) = candidates.first_mut() {
             first.winner = true;
         }

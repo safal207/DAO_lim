@@ -69,6 +69,7 @@ fn handle_upstreams(state: &AdminState) -> Response<Full<Bytes>> {
                 error_count: stats.error_count,
                 load_resonance: rm.map(|m| m.load_resonance).unwrap_or(0.0),
                 tempo_spikiness: rm.map(|m| m.tempo_spikiness).unwrap_or(0.0),
+                circuit: u.circuit_status(),
             }
         })
         .collect();

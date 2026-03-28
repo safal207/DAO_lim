@@ -4,6 +4,7 @@
 //! показывает почему был выбран конкретный upstream.
 
 use serde::{Deserialize, Serialize};
+use crate::upstream::CircuitStatus;
 
 /// Входные параметры для объяснения решения
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -54,6 +55,10 @@ pub struct CandidateScore {
     pub components: ScoreComponents,
     /// Этот upstream был выбран
     pub winner: bool,
+    /// Состояние circuit breaker
+    pub circuit: CircuitStatus,
+    /// Был ли upstream исключён из-за открытого circuit breaker
+    pub circuit_open: bool,
 }
 
 /// Веса политики (для отображения)
@@ -96,6 +101,7 @@ pub struct UpstreamInfo {
     pub error_count: u64,
     pub load_resonance: f64,
     pub tempo_spikiness: f64,
+    pub circuit: CircuitStatus,
 }
 
 /// Ответ /admin/upstreams

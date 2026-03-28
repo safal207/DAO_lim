@@ -173,6 +173,8 @@ pub struct UpstreamConfig {
     pub intent: Option<Vec<String>>,
     #[serde(default = "default_weight")]
     pub weight: u32,
+    /// Настройки circuit breaker (опционально)
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 fn default_weight() -> u32 {
@@ -187,6 +189,24 @@ impl UpstreamConfig {
             .unwrap_or_default()
     }
 }
+
+/// Конфигурация circuit breaker в TOML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerConfig {
+    /// Сколько ошибок подряд открывают цепь (default: 5)
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    /// Время в Open состоянии в секундах (default: 30)
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Успехов в HalfOpen для закрытия (default: 2)
+    #[serde(default = "default_success_threshold")]
+    pub success_threshold: u32,
+}
+
+fn default_failure_threshold() -> u32 { 5 }
+fn default_timeout_secs() -> u64 { 30 }
+fn default_success_threshold() -> u32 { 2 }
 
 /// Конфигурация фильтров
 #[derive(Debug, Clone, Serialize, Deserialize)]

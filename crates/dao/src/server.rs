@@ -6,7 +6,7 @@ use dao_core::{
     memory::Memory,
     sense::Sense,
     upstream::{ConnectionPool, UpstreamState},
-    Intent, Result,
+    Result,
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty};
 use hyper::body::Incoming;
@@ -17,6 +17,8 @@ use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use futures::StreamExt;
 use tracing::{debug, error, info, warn};
 
 /// DAO Server
@@ -27,6 +29,78 @@ pub struct DaoServer {
     memory: Arc<Memory>,
     upstreams: Arc<Vec<UpstreamState>>,
     pool: Arc<ConnectionPool>,
+}
+
+/// Состояние для WebSocket handler (клонируется в spawn)
+#[derive(Clone)]
+struct WsHandlerState {
+    upstreams: Arc<Vec<UpstreamState>>,
+    memory: Arc<Memory>,
+    sense: Arc<Sense>,
+    align: Arc<Align>,
+}
+
+impl WsHandlerState {
+    async fn handle_ws_request(
+        self: Arc<Self>,
+        req: Request<Incoming>,
+    ) -> std::result::Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+        // Проверяем WebSocket upgrade
+        let is_ws = req.headers()
+            .get(hyper::header::UPGRADE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_lowercase().contains("websocket"))
+            .unwrap_or(false);
+
+        if !is_ws {
+            return Ok(Response::builder()
+                .status(400)
+                .body(Empty::<Bytes>::new()
+                    .map_err(|never: Infallible| match never {})
+                    .boxed())
+                .unwrap());
+        }
+
+        let config = self.memory.get_config();
+        let route = config.routes.rule.iter().find(|r| r.match_rule.matches(&req));
+
+        let upstream_url = if let Some(route) = route {
+            let route_upstreams: Vec<_> = route.upstreams.iter()
+                .filter_map(|uc| {
+                    self.upstreams.iter().find(|u| u.name == uc.name).map(|u| Arc::new(u.clone()))
+                })
+                .collect();
+
+            let intent = route.intent();
+            let selected = self.align.select_upstream(&route.policy, &route_upstreams, intent.as_ref());
+            selected.map(|u| u.url.clone())
+        } else {
+            None
+        };
+
+        match upstream_url {
+            Some(url) => {
+                match DaoServer::proxy_websocket_upgrade(&url, req).await {
+                    Ok(resp) => Ok(resp),
+                    Err(e) => {
+                        error!("WebSocket proxy failed: {}", e);
+                        Ok(Response::builder()
+                            .status(502)
+                            .body(Empty::<Bytes>::new()
+                                .map_err(|never: Infallible| match never {})
+                                .boxed())
+                            .unwrap())
+                    }
+                }
+            }
+            None => Ok(Response::builder()
+                .status(404)
+                .body(Empty::<Bytes>::new()
+                    .map_err(|never: Infallible| match never {})
+                    .boxed())
+                .unwrap()),
+        }
+    }
 }
 
 impl DaoServer {
@@ -150,11 +224,134 @@ impl DaoServer {
         Ok(())
     }
 
-    /// Обработка WebSocket соединения
-    async fn handle_websocket_connection(&self, _conn: Connection) -> Result<()> {
-        info!("WebSocket connection handled (placeholder)");
-        // TODO: WebSocket proxying
+    /// Обработка WebSocket соединения — bidirectional proxy
+    async fn handle_websocket_connection(self: Arc<Self>, conn: Connection) -> Result<()> {
+        let state = Arc::new(WsHandlerState {
+            upstreams: self.upstreams.clone(),
+            memory: self.memory.clone(),
+            sense: self.sense.clone(),
+            align: self.align.clone(),
+        });
+
+        let service = service_fn(move |req: Request<Incoming>| {
+            let state = state.clone();
+            async move { state.handle_ws_request(req).await }
+        });
+
+        match conn {
+            Connection::Plain { stream, .. } => {
+                let io = TokioIo::new(stream);
+                if let Err(e) = http1::Builder::new()
+                    .serve_connection(io, service)
+                    .with_upgrades()
+                    .await
+                {
+                    debug!("WebSocket HTTP/1.1 error: {}", e);
+                }
+            }
+            Connection::Tls { stream, .. } => {
+                let io = TokioIo::new(stream);
+                if let Err(e) = http1::Builder::new()
+                    .serve_connection(io, service)
+                    .with_upgrades()
+                    .await
+                {
+                    debug!("WebSocket TLS HTTP/1.1 error: {}", e);
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Proxy WebSocket upgrade request
+    async fn proxy_websocket_upgrade(
+        upstream_url: &str,
+        req: Request<Incoming>,
+    ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
+        use hyper::header::{
+            CONNECTION, UPGRADE, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_ACCEPT,
+            SEC_WEBSOCKET_VERSION,
+        };
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use sha1::{Sha1, Digest};
+
+        // Валидация WebSocket handshake
+        let ws_key = req
+            .headers()
+            .get(SEC_WEBSOCKET_KEY)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        // Вычисляем Sec-WebSocket-Accept
+        let mut hasher = Sha1::new();
+        hasher.update(ws_key.as_bytes());
+        hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        let accept = STANDARD.encode(hasher.finalize());
+
+        // Конвертация upstream URL (http → ws, https → wss)
+        let ws_upstream_url = upstream_url
+            .replacen("http://", "ws://", 1)
+            .replacen("https://", "wss://", 1);
+
+        // Подключение к upstream WebSocket
+        let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
+        let full_url = format!("{}{}", ws_upstream_url.trim_end_matches('/'), path);
+
+        info!("WebSocket proxying to: {}", full_url);
+
+        // Upgrade запрос к upstream
+        let (upstream_ws, _) = match connect_async(&full_url).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("WebSocket upstream connect failed: {}", e);
+                return Err(dao_core::DaoError::Upstream(format!(
+                    "WebSocket connect failed: {}", e
+                )));
+            }
+        };
+
+        // Ответ клиенту: 101 Switching Protocols
+        let response = Response::builder()
+            .status(101)
+            .header(UPGRADE, "websocket")
+            .header(CONNECTION, "Upgrade")
+            .header(SEC_WEBSOCKET_ACCEPT, accept)
+            .body(
+                Empty::<Bytes>::new()
+                    .map_err(|never: Infallible| match never {})
+                    .boxed(),
+            )
+            .map_err(|e| dao_core::DaoError::Internal(format!("Response build error: {}", e)))?;
+
+        // Spawn bidirectional proxy
+        tokio::spawn(async move {
+            let (upstream_sink, upstream_stream) = upstream_ws.split();
+
+            // Получаем upgrade stream от клиента через hyper
+            let on_upgrade = hyper::upgrade::on(req);
+            match on_upgrade.await {
+                Ok(upgraded) => {
+                    let client_ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                        TokioIo::new(upgraded),
+                        tokio_tungstenite::tungstenite::protocol::Role::Server,
+                        None,
+                    ).await;
+                    let (client_sink, client_stream) = client_ws.split();
+
+                    // Bidirectional copy
+                    let c2u = client_stream.forward(upstream_sink);
+                    let u2c = upstream_stream.forward(client_sink);
+                    tokio::select! {
+                        _ = c2u => debug!("Client WebSocket stream closed"),
+                        _ = u2c => debug!("Upstream WebSocket stream closed"),
+                    }
+                }
+                Err(e) => error!("WebSocket upgrade failed: {}", e),
+            }
+        });
+
+        Ok(response)
     }
 
 

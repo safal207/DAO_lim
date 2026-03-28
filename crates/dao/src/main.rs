@@ -59,11 +59,18 @@ async fn main() -> anyhow::Result<()> {
     let mut all_upstreams = Vec::new();
     for route in &config.routes.rule {
         for upstream_cfg in &route.upstreams {
-            let upstream = UpstreamState::new(
+            use dao_core::upstream::CircuitBreakerConfig as CbConfig;
+            let cb_config = upstream_cfg.circuit_breaker.as_ref().map(|c| CbConfig {
+                failure_threshold: c.failure_threshold,
+                success_threshold: c.success_threshold,
+                timeout: std::time::Duration::from_secs(c.timeout_secs),
+            }).unwrap_or_default();
+            let upstream = UpstreamState::with_circuit(
                 upstream_cfg.name.clone(),
                 upstream_cfg.url.clone(),
                 upstream_cfg.intents(),
                 upstream_cfg.weight,
+                cb_config,
             );
             all_upstreams.push(upstream);
         }

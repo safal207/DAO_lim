@@ -1,283 +1,330 @@
 # DAO — Dynamic Awareness Orchestrator
 
-**Лиминальный reverse-proxy с осознанной маршрутизацией трафика**
+**Умный reverse-proxy для AI-инфраструктуры. Маршрутизирует трафик к LLM и другим backend-сервисам на основе реальных метрик: латентности, ошибок и семантики запроса.**
 
-> *Врата сознания* — не просто маршрутизатор, а живая мембрана между потоками данных, чувствующая нагрузку, намерения и ритм системы.
+---
 
-## Что такое DAO?
+## Зачем это нужно
 
-**DAO** (Dynamic Awareness Orchestrator) — это продвинутый HTTP/gRPC/WebSocket reverse-proxy, написанный на Rust, который выходит за рамки традиционной балансировки нагрузки. Вместо простого распределения запросов, DAO *чувствует* поток, понимает намерения (intents) и принимает решения на основе **резонанса** между запросом и состоянием backend-сервисов.
+Когда у вас несколько AI-бэкендов — разные модели, GPU-пулы, облачные и локальные эндпоинты — обычный round-robin не работает:
 
-### Ключевые особенности
+- Один GPU перегружен, другой простаивает
+- Быстрая модель нужна для чата, медленная — для батчевого анализа
+- Провайдер вернул 429, надо переключиться без простоя
+- Непонятно, почему запрос ушёл на медленный backend
 
-- **Resonant Load Balancing** — маршрутизация по "резонансу": латентность + error rate + intent match + tempo spikiness
-- **Intent-aware Routing** — теги намерений (realtime, batch, streaming, ai) для семантической маршрутизации
-- **Hot Configuration Reload** — горячая перезагрузка без перезапуска
-- **Service Profiles & Memory** — система "помнит", какой трафик полезен/вреден для каждого сервиса
-- **WASM Filters** — безопасные плагины на WebAssembly
-- **HTTP/1.1, HTTP/2, WebSocket** — полная поддержка современных протоколов
-- **Future: HTTP/3/QUIC** — в дорожной карте
+DAO решает эти проблемы через **intent-aware routing** и **resonant load balancing** — выбирает backend по реальным p95-латентности, error rate и семантике запроса.
 
-## Архитектура: 5 модулей лиминального шлюза
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                     DAO Gateway                          │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐     │
-│  │  Gate  │──▶│ Sense  │──▶│ Align  │──▶│  Flow  │     │
-│  └────────┘   └────────┘   └────────┘   └────────┘     │
-│      │             │            │            │          │
-│      └─────────────┴────────────┴────────────┴──────┐   │
-│                                                      ▼   │
-│                                                 ┌────────┐│
-│                                                 │ Memory ││
-│                                                 └────────┘│
-└─────────────────────────────────────────────────────────┘
-```
-
-### 1. **Gate** — Врата
-- Прием соединений (TCP, TLS)
-- ALPN negotiation (h2/h1)
-- TLS termination
-- SNI routing (будущее)
-
-### 2. **Sense** — Чувствование
-- Телеметрия в реальном времени
-- Метрики: latency p50/p95, error rate, RPS
-- Резонанс-метрики: load_resonance, tempo_spikiness
-- Prometheus exporter
-
-### 3. **Align** — Выравнивание
-- Политики маршрутизации
-- Resonant load balancing
-- Circuit breaker (будущее)
-- Canary routing (будущее)
-- A/B testing (будущее)
-
-### 4. **Flow** — Поток
-- Конвейер фильтров
-- Header manipulation
-- Rate limiting
-- Authentication (будущее)
-- WASM filters
-
-### 5. **Memory** — Память
-- Горячая конфигурация
-- Профили сервисов
-- История snapshot'ов
-- Откаты конфигурации
+---
 
 ## Быстрый старт
 
-### Требования
-
-- Rust 1.75+ (`rustup`)
-- OpenSSL (для dev сертификатов)
-
-### Установка и запуск
-
 ```bash
-# Клонирование репозитория
 git clone https://github.com/safal207/DAO_lim.git
 cd DAO_lim
-
-# Генерация dev сертификатов (опционально)
-cd certs
-./generate-dev-certs.sh
-cd ..
-
-# Сборка
 cargo build --release
 
-# Запуск с примером конфигурации
-cargo run --release -- --config configs/dao.toml
-
-# Или запуск бинарника
 ./target/release/dao --config configs/dao.toml
 ```
 
-### Проверка работы
+Запустить отладку маршрутизации:
 
 ```bash
-# Метрики Prometheus
-curl http://localhost:9102/metrics
-
-# Тестовый запрос (если настроены upstreams)
-curl -H "Host: api.example.com" http://localhost:8443/v1/health
+./target/release/daoctl explain \
+  --host llm.myapp.com \
+  --path /v1/chat/completions \
+  --intent realtime
 ```
+
+```
+  ✓ Выбран: gpt-4o-mini-pool
+
+  UPSTREAM               SCORE     p95ms     err%       RPS   load×w  intent×w
+  ────────────────────────────────────────────────────────────────────────────
+▶ gpt-4o-mini-pool     0.0540      23.0      0.0%      87.3   0.0540    0.0000
+· gpt-4-turbo-pool     0.3800     450.0      1.2%      12.1   0.3600    0.0000
+· local-llama-70b      0.9100    1200.0      4.5%       3.2   0.9000    0.0000
+
+    ┌ Почему выбран gpt-4o-mini-pool:
+    │   load_resonance  = 0.0900  (p95=23ms, err=0.0%)
+    │   intent_gap      = 0.0000  (intent совпадает)
+    └   score = 0.60×0.0900 + 0.30×0.0000 + 0.10×0.0000 = 0.0540
+```
+
+---
+
+## Типичные сценарии для AI
+
+### 1. Разные модели для разных задач
+
+```toml
+# Чат-запросы → быстрая модель
+[[routes.rule]]
+name    = "chat"
+intent  = "realtime"
+policy  = "resonant"
+
+  [routes.rule.match]
+  path_prefix = "/v1/chat"
+
+  [[routes.rule.upstreams]]
+  name   = "gpt-4o-mini"
+  url    = "http://openai-proxy:8080"
+  intent = ["realtime", "low-latency"]
+  weight = 3
+
+  [[routes.rule.upstreams]]
+  name   = "local-llama-8b"
+  url    = "http://gpu-node-1:11434"
+  intent = ["realtime"]
+  weight = 1
+
+# Аналитика → мощная модель
+[[routes.rule]]
+name   = "analysis"
+intent = "batch"
+policy = "resonant"
+
+  [routes.rule.match]
+  path_prefix = "/v1/analyze"
+
+  [[routes.rule.upstreams]]
+  name   = "gpt-4-turbo"
+  url    = "http://openai-proxy:8081"
+  intent = ["batch", "high-quality"]
+  weight = 1
+
+  [[routes.rule.upstreams]]
+  name   = "local-llama-70b"
+  url    = "http://gpu-node-2:11434"
+  intent = ["batch"]
+  weight = 2
+```
+
+### 2. Streaming-ответы
+
+```toml
+[[routes.rule]]
+name   = "streaming"
+intent = "streaming"
+
+  [routes.rule.match]
+  path_prefix = "/v1/stream"
+  upgrade     = "websocket"
+
+  [[routes.rule.upstreams]]
+  name   = "streaming-backend"
+  url    = "ws://gpu-node-1:11434"
+  intent = ["streaming", "realtime"]
+```
+
+### 3. Автоматический fallback при перегрузке
+
+DAO отслеживает p95-латентность и error rate в реальном времени. Если `gpu-node-1` начинает возвращать ошибки — трафик автоматически перетекает к `gpu-node-2` без изменения конфига.
+
+Настройка весов:
+```toml
+[policies.ai-balanced]
+w_load   = 0.7   # Больше веса нагрузке (latency + errors)
+w_intent = 0.2   # Меньше — intent matching
+w_tempo  = 0.1   # Меньше — RPS spikiness
+```
+
+---
+
+## Как работает выбор backend
+
+```
+score = w_load × load_resonance
+      + w_intent × intent_gap
+      + w_tempo × tempo_spikiness
+```
+
+| Компонент | Что измеряет | Значение |
+|-----------|-------------|---------|
+| `load_resonance` | p95 latency + error rate + queue | 0 = idle, 10 = перегружен |
+| `intent_gap` | Совпадение тега с backend | 0 = совпадает, 1 = нет |
+| `tempo_spikiness` | Вариативность RPS (CV) | 0 = стабильный, >1 = спайки |
+
+**Backend с минимальным score выигрывает.**
+
+Команда `daoctl explain` показывает полный расчёт для любого запроса — без гадания.
+
+---
+
+## daoctl — инструмент отладки
+
+```bash
+# Объяснить решение маршрутизации
+daoctl explain --host llm.myapp.com --path /v1/chat --intent realtime
+
+# Состояние всех backend в реальном времени
+daoctl upstreams
+
+# Проверить что DAO живой
+daoctl health
+
+# Подключиться к другому экземпляру
+daoctl --server http://prod-dao:9103 upstreams
+
+# Сырой JSON для скриптов
+daoctl explain --host api.example.com --path /v1/users --json | jq .
+```
+
+Admin API доступен на `http://127.0.0.1:9103` (настраивается через `server.admin_bind`).
+
+---
+
+## Архитектура
+
+```
+CLIENT REQUEST
+      │
+      ▼
+  ┌───────┐     TCP/TLS accept, protocol negotiation
+  │ Gate  │
+  └───┬───┘
+      │
+      ▼
+  ┌───────┐     p95 latency, error rate, RPS per upstream
+  │ Sense │
+  └───┬───┘
+      │
+      ▼
+  ┌───────┐     resonant score → выбор лучшего backend
+  │ Align │
+  └───┬───┘
+      │
+      ▼
+  ┌───────┐     header manipulation, rate limiting, WASM filters
+  │ Flow  │
+  └───┬───┘
+      │
+      ▼
+  UPSTREAM
+```
+
+Состояние хранится в **Memory** — горячая перезагрузка конфигурации без рестарта, снапшоты для отката.
+
+---
 
 ## Конфигурация
 
-Пример конфигурации (`configs/dao.toml`):
-
 ```toml
 [server]
-bind = "0.0.0.0:8443"
-# tls_cert = "certs/dao.crt"
-# tls_key  = "certs/dao.key"
+bind       = "0.0.0.0:8080"
+admin_bind = "127.0.0.1:9103"    # daoctl подключается сюда
+workers    = 4
 
 [telemetry]
-prometheus_bind = "0.0.0.0:9102"
+prometheus_bind = "0.0.0.0:9102"  # /metrics для Grafana
 
 [[routes.rule]]
-name = "api-v1"
+name   = "llm-gateway"
 policy = "resonant"
 intent = "realtime"
 
   [routes.rule.match]
-  host = "api.example.com"
+  host        = "llm.myapp.com"
   path_prefix = "/v1/"
 
   [[routes.rule.upstreams]]
-  name = "api-backend-1"
-  url  = "http://127.0.0.1:8081"
+  name   = "fast-model"
+  url    = "http://gpu-1:11434"
   intent = ["realtime", "low-latency"]
   weight = 2
 
-  [routes.rule.filters]
-  request_headers_add = { "X-DAO-Gateway" = "true" }
-  rate_limit_rps = 1000
+  [[routes.rule.upstreams]]
+  name   = "fallback-model"
+  url    = "http://gpu-2:11434"
+  intent = ["realtime"]
+  weight = 1
 
 [policies.resonant]
-w_load = 0.6      # Вес load_resonance
-w_intent = 0.3    # Вес intent match
-w_tempo = 0.1     # Вес tempo spikiness
+w_load   = 0.6
+w_intent = 0.3
+w_tempo  = 0.1
 ```
-
-## Резонанс-метрики
-
-DAO использует уникальную систему оценки upstreams:
-
-```
-resonant_score = w_load × load_resonance
-               + w_intent × intent_gap
-               + w_tempo × tempo_spikiness
-```
-
-Где:
-- **load_resonance** = `f(p95_latency, error_rate, queue_depth)`
-- **intent_gap** = `0.0` (perfect match) до `1.0` (no match)
-- **tempo_spikiness** = вариативность RPS (coefficient of variation)
-
-Upstream с *минимальным* resonant_score выбирается для запроса.
-
-## Структура проекта
-
-```
-DAO_lim/
-├── crates/
-│   ├── dao/            # Главный binary
-│   ├── dao-core/       # Ядро: Gate, Sense, Align, Flow, Memory
-│   ├── dao-filters/    # WASM фильтры
-│   ├── dao-telemetry/  # Метрики и трейсинг
-│   └── dao-admin/      # Hot-reload и управление
-├── configs/            # Примеры конфигураций
-├── certs/              # TLS сертификаты (dev)
-├── examples/           # Примеры использования
-└── Cargo.toml          # Workspace
-```
-
-## Дорожная карта
-
-### ✅ Iteration 1 (MVP)
-- [x] HTTP/1.1, HTTP/2
-- [x] WebSocket proxy framework
-- [x] Host/path routing
-- [x] Resonant load balancing
-- [x] Hot-reload конфигурации
-- [x] Prometheus metrics
-- [ ] Full request proxying (в процессе)
-
-### 🔄 Iteration 2
-- [ ] gRPC proxy
-- [ ] Circuit breaker
-- [ ] Базовый кеш
-- [ ] CLI управления (`daoctl`)
-
-### 🚀 Iteration 3
-- [ ] HTTP/3/QUIC
-- [ ] Canary routing
-- [ ] A/B testing
-- [ ] Динамический конфиг через gRPC API
-
-### 🌟 Iteration 4
-- [ ] WASM marketplace
-- [ ] ML-based автотюнинг весов
-- [ ] Профили сервисов с обучением
-- [ ] Distributed tracing (OpenTelemetry)
-
-## Философия
-
-DAO — это не просто прокси. Это *мембрана осознания* между клиентами и сервисами:
-
-- **Не контроль, а координация** — система чувствует, а не командует
-- **Резонанс вместо правил** — решения через гармонию метрик
-- **Память и эволюция** — система учится на истории
-- **Лиминальность** — DAO существует в пограничном пространстве между слоями
-
-## Примеры использования
-
-### Микросервисная архитектура
-```
-Client → DAO → [Service A (realtime), Service B (batch), Service C (ai)]
-```
-DAO автоматически направляет realtime-запросы к Service A, batch к B, и т.д.
-
-### Multi-region routing
-```
-Client → DAO → [Region US-EAST, Region EU-WEST]
-```
-DAO выбирает регион с минимальной латентностью и совпадающим intent.
-
-### Canary deployments (будущее)
-```
-Client → DAO → [Stable: 95%, Canary: 5%]
-```
-
-## Тестирование
-
-```bash
-# Все тесты
-cargo test
-
-# Только dao-core
-cargo test -p dao-core
-
-# С логами
-RUST_LOG=debug cargo test
-```
-
-## Производительность
-
-DAO написан на Rust с использованием:
-- `tokio` — асинхронный runtime
-- `hyper` — быстрый HTTP
-- `tower` — middleware framework
-- Zero-copy где возможно
-
-**Бенчмарки** (будут добавлены)
-
-## Вклад
-
-Проект открыт для вклада! Пожалуйста:
-
-1. Fork репозиторий
-2. Создайте feature branch
-3. Напишите тесты
-4. Отправьте Pull Request
-
-## Лицензия
-
-MIT OR Apache-2.0 (на выбор)
-
-## Авторы
-
-DAO_lim Contributors
 
 ---
 
-*"Врата сознания открыты. Поток осознан. Резонанс найден."*
+## Установка
 
-**DAO — Gateway to Awareness** 🌀
+**Требования:** Rust 1.75+ (`rustup`)
+
+```bash
+# Собрать всё
+cargo build --release
+
+# Бинарники
+./target/release/dao      # Основной gateway
+./target/release/daoctl   # CLI инструмент
+```
+
+---
+
+## Метрики (Prometheus)
+
+```bash
+curl http://localhost:9102/metrics
+```
+
+Экспортируются: latency histograms, request counts, error rates, resonance scores — по каждому upstream отдельно. Готово для Grafana.
+
+---
+
+## Тесты
+
+```bash
+cargo test
+cargo test -p dao-core    # только ядро
+RUST_LOG=debug cargo test
+```
+
+---
+
+## Дорожная карта
+
+### ✅ Реализовано
+- HTTP/1.1, HTTP/2, WebSocket
+- Resonant load balancing с intent-routing
+- Hot-reload конфигурации
+- Prometheus метрики
+- `daoctl` CLI (explain, upstreams, health)
+- Admin HTTP API
+
+### 🔄 В работе
+- gRPC proxy
+- Circuit breaker
+- Полное WebSocket proxying
+
+### 🚀 Планируется
+- HTTP/3/QUIC
+- Canary routing / A/B testing
+- OpenTelemetry distributed tracing
+- ML-based автотюнинг весов политик
+- WASM plugin marketplace
+
+---
+
+## Стек
+
+| Компонент | Технология |
+|-----------|-----------|
+| Runtime | tokio |
+| HTTP | hyper + tower |
+| TLS | rustls (без OpenSSL) |
+| Метрики | prometheus |
+| Config | TOML + hot-reload |
+| Plugins | WebAssembly (wasmtime) |
+| Latency stats | HDR histogram |
+
+---
+
+## Лицензия
+
+MIT OR Apache-2.0
+
+---
+
+*DAO — умный шлюз для команд, которые запускают AI в продакшне.*

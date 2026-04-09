@@ -20,10 +20,18 @@ tower-http = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
+sha1 = { workspace = true }
+base64 = { workspace = true }
 
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+metrics = { workspace = true }
+rand = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }
 
@@ -44,5 +52,9 @@ workspace = true
 [dependencies.http]
 workspace = true
 
-[dependencies.pin-project]
-workspace = true
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+dao-core = { path = "../dao-core" }
+dao-admin = { path = "../dao-admin" }

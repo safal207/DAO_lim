@@ -5,6 +5,7 @@ members = [
     "crates/dao-filters",
     "crates/dao-telemetry",
     "crates/dao-admin",
+    "crates/daoctl",
 ]
 resolver = "2"
 
@@ -52,6 +53,13 @@ metrics-exporter-prometheus = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# OpenTelemetry
+opentelemetry = { version = "0.26" }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.26"
+tracing-opentelemetry = "0.27"
+
 # WASM runtime
 wasmtime = "26.0"
 wasmtime-wasi = "26.0"
@@ -70,6 +78,13 @@ notify = "7.0"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+
+# WebSocket crypto
+sha1 = "0.10"
+base64 = "0.22"
+
+# Random
+rand = "0.8"
 
 # Time & stats
 chrono = "0.4"

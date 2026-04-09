@@ -14,8 +14,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub mod reload;
+pub mod api;
 
 pub use reload::ConfigReloader;
+pub use api::{AdminState, start_admin_api};
 
 /// Admin — система управления
 pub struct Admin {

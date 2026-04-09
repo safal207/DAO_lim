@@ -15,4 +15,10 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+
 dao-core = { path = "../dao-core" }

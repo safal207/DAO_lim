@@ -1,10 +1,22 @@
 //! Upstream management — работа с backend серверами
 
 use crate::Intent;
+use super::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitStatus};
 use hdrhistogram::Histogram;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Результат последней активной проверки доступности
+#[derive(Debug, Clone)]
+pub struct HealthProbeResult {
+    /// Upstream вернул ответ < 500
+    pub healthy: bool,
+    /// Время ответа в миллисекундах
+    pub latency_ms: f64,
+    /// Момент проверки
+    pub checked_at: Instant,
+}
 
 /// Состояние upstream сервера
 #[derive(Debug, Clone)]
@@ -14,17 +26,42 @@ pub struct UpstreamState {
     pub intents: Vec<Intent>,
     pub weight: u32,
     pub stats: Arc<RwLock<UpstreamStats>>,
+    pub circuit: Arc<CircuitBreaker>,
+    /// Последний результат активной проверки (None = не настроена)
+    pub last_health: Arc<RwLock<Option<HealthProbeResult>>>,
 }
 
 impl UpstreamState {
     pub fn new(name: String, url: String, intents: Vec<Intent>, weight: u32) -> Self {
+        Self::with_circuit(name, url, intents, weight, CircuitBreakerConfig::default())
+    }
+
+    pub fn with_circuit(
+        name: String,
+        url: String,
+        intents: Vec<Intent>,
+        weight: u32,
+        cb_config: CircuitBreakerConfig,
+    ) -> Self {
         Self {
             name,
             url,
             intents,
             weight,
             stats: Arc::new(RwLock::new(UpstreamStats::new())),
+            circuit: Arc::new(CircuitBreaker::new(cb_config)),
+            last_health: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Можно ли маршрутизировать запросы на этот upstream?
+    pub fn is_available(&self) -> bool {
+        self.circuit.is_available()
+    }
+
+    /// Статус circuit breaker для мониторинга
+    pub fn circuit_status(&self) -> CircuitStatus {
+        self.circuit.status()
     }
 
     /// Вычисление intent match score (0.0 = полное совпадение, 1.0 = нет совпадений)
@@ -42,15 +79,45 @@ impl UpstreamState {
         1.0 // No match
     }
 
-    /// Запись результата запроса
+    /// Запись результата запроса — обновляет stats и circuit breaker
     pub fn record_request(&self, latency: Duration, success: bool) {
         let mut stats = self.stats.write();
         stats.record(latency, success);
+        drop(stats);
+
+        if success {
+            self.circuit.record_success();
+        } else {
+            self.circuit.record_failure();
+        }
+
+        // Обновляем gauge состояния circuit breaker: 0=closed, 1=open, 2=half_open
+        let circuit_value: f64 = match self.circuit.status() {
+            super::circuit_breaker::CircuitStatus::Closed { .. }   => 0.0,
+            super::circuit_breaker::CircuitStatus::Open { .. }     => 1.0,
+            super::circuit_breaker::CircuitStatus::HalfOpen { .. } => 2.0,
+        };
+        metrics::gauge!("dao_circuit_state", "upstream" => self.name.clone())
+            .set(circuit_value);
     }
 
     /// Получение текущей статистики
     pub fn get_stats(&self) -> UpstreamStats {
         self.stats.read().clone()
+    }
+
+    /// Последний результат активной проверки
+    pub fn get_health_status(&self) -> Option<HealthProbeResult> {
+        self.last_health.read().clone()
+    }
+
+    /// Обновление результата активной проверки (вызывается health checker'ом)
+    pub fn update_health(&self, healthy: bool, latency_ms: f64) {
+        *self.last_health.write() = Some(HealthProbeResult {
+            healthy,
+            latency_ms,
+            checked_at: Instant::now(),
+        });
     }
 }
 

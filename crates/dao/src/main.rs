@@ -3,19 +3,20 @@
 //! Лиминальный reverse-proxy с осознанной маршрутизацией
 
 use clap::Parser;
-use dao_admin::Admin;
+use dao_admin::{Admin, AdminState, start_admin_api};
 use dao_core::{
     align::Align,
     config::DaoConfig,
+    flow::RateLimiterMap,
     gate::{Gate, GateConfig, TlsConfig},
     memory::Memory,
     sense::Sense,
-    upstream::UpstreamState,
+    upstream::{UpstreamState, HealthCheckConfig, spawn_health_checker},
 };
-use dao_telemetry::{init_telemetry, register_dao_metrics, start_prometheus_exporter};
+use dao_telemetry::{init_telemetry_with_otlp, register_dao_metrics, start_prometheus_exporter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod server;
 use server::DaoServer;
@@ -37,8 +38,15 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Инициализация телеметрии
-    init_telemetry()?;
+    // Загрузка конфигурации нужна до init_telemetry для otlp_endpoint,
+    // но clap Args уже распарсены, поэтому читаем конфиг дважды
+    // (первый раз только для endpoint — это дёшево).
+    let otlp_endpoint = DaoConfig::from_file(&args.config)
+        .ok()
+        .and_then(|c| c.telemetry)
+        .and_then(|t| t.otlp_endpoint);
+
+    init_telemetry_with_otlp(otlp_endpoint.as_deref())?;
     register_dao_metrics();
 
     if args.verbose {
@@ -59,16 +67,41 @@ async fn main() -> anyhow::Result<()> {
     let mut all_upstreams = Vec::new();
     for route in &config.routes.rule {
         for upstream_cfg in &route.upstreams {
-            let upstream = UpstreamState::new(
+            use dao_core::upstream::CircuitBreakerConfig as CbConfig;
+            let cb_config = upstream_cfg.circuit_breaker.as_ref().map(|c| CbConfig {
+                failure_threshold: c.failure_threshold,
+                success_threshold: c.success_threshold,
+                timeout: std::time::Duration::from_secs(c.timeout_secs),
+            }).unwrap_or_default();
+            let upstream = UpstreamState::with_circuit(
                 upstream_cfg.name.clone(),
                 upstream_cfg.url.clone(),
                 upstream_cfg.intents(),
                 upstream_cfg.weight,
+                cb_config,
             );
             all_upstreams.push(upstream);
         }
     }
     let upstreams = Arc::new(all_upstreams);
+
+    // Запуск активных health checkers для upstream'ов с настроенным health_check
+    for route in &config.routes.rule {
+        for upstream_cfg in &route.upstreams {
+            if let Some(ref hc) = upstream_cfg.health_check {
+                if let Some(upstream) = upstreams.iter().find(|u| u.name == upstream_cfg.name) {
+                    let hc_config = HealthCheckConfig {
+                        path: hc.path.clone(),
+                        interval_secs: hc.interval_secs,
+                        timeout_secs: hc.timeout_secs,
+                    };
+                    info!("Starting health checker for '{}' at {} every {}s",
+                        upstream.name, hc.path, hc.interval_secs);
+                    spawn_health_checker(upstream.clone(), hc_config);
+                }
+            }
+        }
+    }
 
     // Sense — телеметрия
     let sense = Sense::new(upstreams.clone());
@@ -130,13 +163,75 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Запуск Admin API (daoctl)
+    if let Some(ref admin_bind) = config.server.admin_bind {
+        let admin_addr: std::net::SocketAddr = admin_bind.parse()?;
+        let admin_state = AdminState {
+            upstreams: upstreams.clone(),
+            memory: memory.clone(),
+            sense: Arc::new(sense.clone()),
+            align: Arc::new(align.clone()),
+            config_path: args.config.clone(),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = start_admin_api(admin_addr, admin_state).await {
+                error!("Admin API failed: {}", e);
+            }
+        });
+    }
+
+    // Rate limiter — строим из конфига
+    let rate_limiter = RateLimiterMap::new();
+    for route in &config.routes.rule {
+        if let Some(ref filters) = route.filters {
+            if let Some(rps) = filters.rate_limit_rps {
+                info!("Rate limit for '{}': {} rps", route.name, rps);
+                rate_limiter.configure(&route.name, rps);
+            }
+        }
+    }
+
+    // Канал shutdown для graceful drain
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Обработка SIGTERM и SIGINT
+    tokio::spawn(async move {
+        let sigterm = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                signal(SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler")
+                    .recv()
+                    .await;
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received, initiating graceful shutdown...");
+            }
+            _ = sigterm => {
+                info!("SIGTERM received, initiating graceful shutdown...");
+            }
+        }
+
+        if shutdown_tx.send(()).is_err() {
+            warn!("Failed to send shutdown signal (receiver dropped)");
+        }
+    });
+
     // Создание и запуск сервера
-    let server = DaoServer::new(gate, sense, align, memory, upstreams);
+    let server = DaoServer::new(gate, sense, align, memory, upstreams, rate_limiter);
 
     info!("DAO started successfully");
     info!("Dynamic Awareness Orchestrator — врата сознания открыты");
 
-    server.run().await?;
+    server.run(shutdown_rx).await?;
 
     Ok(())
 }

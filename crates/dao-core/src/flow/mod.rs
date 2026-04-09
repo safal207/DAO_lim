@@ -12,7 +12,10 @@ use http::{Request, Response, HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 
 pub mod filters;
+pub mod rate_limit;
+
 pub use filters::{Filter, FilterChain};
+pub use rate_limit::RateLimiterMap;
 
 /// Flow — система обработки потока
 pub struct Flow {

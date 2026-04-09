@@ -7,9 +7,11 @@ bind = "0.0.0.0:8443"
 # tls_cert = "certs/dao.crt"
 # tls_key  = "certs/dao.key"
 workers = 4
+admin_bind = "127.0.0.1:9103"  # daoctl admin API
 
 [telemetry]
 prometheus_bind = "0.0.0.0:9102"
+# otlp_endpoint = "http://localhost:4317"  # OpenTelemetry OTLP gRPC export
 
 # ============================================================
 # Routes — Маршруты и правила
@@ -22,6 +24,7 @@ prometheus_bind = "0.0.0.0:9102"
 name = "api-v1"
 policy = "resonant"
 intent = "realtime"
+retry_attempts = 1   # повторить 1 раз при 5xx или connect error
 
   [routes.rule.match]
   host = "api.example.com"
@@ -33,11 +36,21 @@ intent = "realtime"
   intent = ["realtime", "low-latency"]
   weight = 2
 
+    [routes.rule.upstreams.health_check]
+    path          = "/health"
+    interval_secs = 10
+    timeout_secs  = 5
+
   [[routes.rule.upstreams]]
   name = "api-backend-2"
   url  = "http://127.0.0.1:8082"
   intent = ["realtime"]
   weight = 1
+
+    [routes.rule.upstreams.health_check]
+    path          = "/health"
+    interval_secs = 10
+    timeout_secs  = 5
 
   [routes.rule.filters]
   request_headers_add = { "X-DAO-Gateway" = "true", "X-DAO-Version" = "0.1.0" }

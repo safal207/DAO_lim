@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAO_lim</title>
+  <style>
+    :root { --bg:#f4efe6; --panel:rgba(255,250,242,.9); --ink:#1e1a17; --muted:#63584f; --line:rgba(30,26,23,.12); --accent:#b24a2a; --accent2:#224f66; --shadow:0 18px 60px rgba(42,28,20,.12); }
+    * { box-sizing:border-box; } body { margin:0; font-family:"Avenir Next","Segoe UI","Helvetica Neue",sans-serif; color:var(--ink); background:radial-gradient(circle at top left, rgba(178,74,42,.15), transparent 34%),radial-gradient(circle at top right, rgba(34,79,102,.14), transparent 30%),linear-gradient(180deg, #fbf7f1 0%, var(--bg) 100%); line-height:1.5; }
+    .wrap { width:min(1120px, calc(100% - 32px)); margin:0 auto; } .hero { padding:72px 0 36px; } .eyebrow { letter-spacing:.18em; text-transform:uppercase; font-size:12px; color:var(--accent); font-weight:700; }
+    h1,h2,h3 { font-family:"Iowan Old Style","Palatino Linotype",Georgia,serif; line-height:1.02; margin:0; } h1 { font-size:clamp(44px, 8vw, 86px); max-width:900px; margin-top:14px; } .lead { max-width:760px; margin-top:20px; font-size:clamp(18px,2.6vw,24px); color:var(--muted); }
+    .cta-row,.links { display:flex; flex-wrap:wrap; gap:14px; margin-top:28px; } .btn,.ghost { display:inline-block; padding:14px 18px; border-radius:999px; text-decoration:none; font-weight:700; } .btn { background:var(--ink); color:#fff; } .ghost { background:rgba(255,255,255,.55); color:var(--ink); border:1px solid var(--line); }
+    .grid { display:grid; grid-template-columns:1.25fr .95fr; gap:22px; margin-top:38px; } .card,.bullet { background:var(--panel); border:1px solid var(--line); border-radius:28px; padding:24px; box-shadow:var(--shadow); }
+    .card h3,.bullet h3 { font-size:26px; margin-bottom:14px; } .stat { padding:14px 0; border-top:1px solid var(--line); display:grid; grid-template-columns:132px 1fr; gap:12px; } .stat:first-of-type { border-top:0; padding-top:0; } .stat b { color:var(--accent2); }
+    .section { padding:18px 0 54px; } .section h2 { font-size:clamp(30px,5vw,52px); margin-bottom:18px; } .three { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; } .bullet p { margin:10px 0 0; color:var(--muted); }
+    .doc-links { display:grid; gap:12px; margin-top:16px; } .doc-links a { color:var(--ink); text-decoration:none; padding:14px 16px; border-radius:16px; background:rgba(255,255,255,.62); border:1px solid var(--line); display:block; }
+    ul.clean { list-style:none; margin:18px 0 0; padding:0; display:grid; gap:12px; } ul.clean li { padding:14px 16px; border-radius:16px; background:rgba(255,255,255,.6); border:1px solid var(--line); }
+    .footer { padding:0 0 64px; color:var(--muted); font-size:14px; } @media (max-width:860px) { .grid,.three { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">Project Landing</div>
+      <h1>Explainable routing for AI infrastructure.</h1>
+      <p class="lead">DAO_lim is an open-source routing layer for AI backends where latency, failure, and semantic intent all matter. It exists to make backend choice explicit, inspectable, and measurable.</p>
+      <div class="cta-row">
+        <a class="btn" href="https://github.com/safal207/DAO_lim/blob/main/docs/STACK_DEMO.md">Review stack demo</a>
+        <a class="ghost" href="./grants/nlnet-commons.html">View NLnet overlay</a>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Why it exists</h3>
+          <div class="stat"><b>Problem</b><span>Generic proxies do not explain why one model backend or worker got the request.</span></div>
+          <div class="stat"><b>Consequence</b><span>Teams inherit latency spikes, weak failover, and opaque routing behavior.</span></div>
+          <div class="stat"><b>Contribution</b><span>DAO_lim turns routing from hidden glue into a reviewable infrastructure decision layer.</span></div>
+        </div>
+        <div class="card">
+          <h3>Reviewer docs</h3>
+          <div class="doc-links">
+            <a href="https://github.com/safal207/DAO_lim/blob/main/docs/BENCHMARKS.md">Benchmarks and measurement scope</a>
+            <a href="https://github.com/safal207/DAO_lim/blob/main/docs/STACK_DEMO.md">Stack walkthrough</a>
+            <a href="https://github.com/safal207/DAO_lim/blob/main/grants/README.md">Grant materials index</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Why it matters</h2>
+      <div class="three">
+        <div class="bullet"><h3>Open infra</h3><p>Reusable as a standalone routing and control layer, not tied to one downstream application.</p></div>
+        <div class="bullet"><h3>Trust and visibility</h3><p>The value is not only routing traffic. The value is being able to inspect and justify the choice.</p></div>
+        <div class="bullet"><h3>Stack fit</h3><p>DAO_lim complements storage and runtime layers by making the entry point accountable too.</p></div>
+      </div>
+    </section>
+    <section class="section">
+      <h2>What to remember</h2>
+      <ul class="clean">
+        <li>AI traffic behaves differently from generic HTTP traffic.</li>
+        <li>Opaque routing creates operational and trust debt.</li>
+        <li>DAO_lim exists to make backend choice explicit, inspectable, and open.</li>
+      </ul>
+    </section>
+    <div class="footer">Evergreen project landing for DAO_lim. Program-specific overlays live under /grants/.</div>
+  </div>
+</body>
+</html>

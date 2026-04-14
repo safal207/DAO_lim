@@ -1,33 +1,26 @@
-# DAO_lim Grant Readiness
+# Grant Materials for DAO_lim
 
-## Positioning
+This directory contains NLnet-facing grant material for `DAO_lim` as part of
+the broader Liminal Stack submission to `NGI Zero Commons Fund`.
 
-DAO_lim is the routing layer of the Liminal Stack: an intent-aware reverse proxy
-for AI backends with explainable routing decisions, live backend scoring, and
-reusable control surfaces.
+## Files
 
-## Why it fits NGI Zero Commons Fund
+- `NLNET_COMMONS_APPLICATION.md` - stack-wide application draft shared across
+  `DAO_lim`, `LiminalBD`, and `GardenLiminal`
+- `NLNET_COMMONS_REPO_BRIEF.md` - DAO_lim-specific positioning, scope, and
+  submission notes
 
-- open infrastructure component rather than a closed product
-- reusable independently from the rest of the stack
-- improves transparency at the routing layer
-- supports self-hosted and interoperable deployments
+## Current call
 
-## Grant-facing strengths visible in the repository
+`NGI Zero Entrust` is closed. The active funding track is
+`NGI Zero Commons Fund`, with the next deadline set to `June 1, 2026, 12:00
+CEST`.
 
-- Rust workspace with multiple crates
-- `license = "MIT OR Apache-2.0"` in [Cargo.toml](../Cargo.toml)
-- routing narrative already present in [README.md](../README.md)
-- intent-aware routing, telemetry, and `daoctl` explain flow documented
+## DAO_lim role in the stack
 
-## Readiness notes
+DAO_lim is the routing and policy layer of the Liminal Stack:
 
-- The repository now includes the missing MIT license text so the dual-license
-  claim matches the repository contents.
-- The README is technically strong, but a short fund-facing summary would still
-  help reviewers who are not deep in AI infra routing.
-
-## Recommended next fixes before submission
-
-- add a short architecture diagram for reviewer onboarding
-- add a one-page milestone list tied to the NLnet application
+- intent-aware reverse proxy for AI and service backends
+- explainable routing decisions via `daoctl`
+- reusable standalone infrastructure component
+- permissively licensed Rust workspace (`MIT OR Apache-2.0`)

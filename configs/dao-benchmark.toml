@@ -1,0 +1,59 @@
+# DAO benchmark configuration
+# Reproducible local setup for steady-state and failover measurements.
+
+[server]
+bind = "127.0.0.1:19080"
+workers = 2
+admin_bind = "127.0.0.1:19103"
+
+[telemetry]
+prometheus_bind = "127.0.0.1:19102"
+
+[routes]
+
+[[routes.rule]]
+name = "bench-realtime"
+policy = "resonant"
+intent = "realtime"
+retry_attempts = 1
+
+  [routes.rule.match]
+  host = "bench.dao.local"
+  path_prefix = "/v1/"
+
+  [[routes.rule.upstreams]]
+  name = "fast-primary"
+  url = "http://127.0.0.1:18081"
+  intent = ["realtime", "low-latency"]
+  weight = 2
+
+    [routes.rule.upstreams.health_check]
+    path = "/health"
+    interval_secs = 1
+    timeout_secs = 1
+
+    [routes.rule.upstreams.circuit_breaker]
+    failure_threshold = 2
+    timeout_secs = 5
+    success_threshold = 1
+
+  [[routes.rule.upstreams]]
+  name = "fallback-secondary"
+  url = "http://127.0.0.1:18082"
+  intent = ["realtime"]
+  weight = 1
+
+    [routes.rule.upstreams.health_check]
+    path = "/health"
+    interval_secs = 1
+    timeout_secs = 1
+
+    [routes.rule.upstreams.circuit_breaker]
+    failure_threshold = 2
+    timeout_secs = 5
+    success_threshold = 1
+
+[policies.resonant]
+w_load = 0.6
+w_intent = 0.3
+w_tempo = 0.1

@@ -37,6 +37,9 @@ Build the binaries first:
 cargo build --release -p dao -p daoctl
 ```
 
+If Windows build tooling is broken on your machine, see `docs/TOOLCHAIN_FIX.md`
+for the exact GNU/MSVC recovery paths captured during benchmark setup.
+
 Then run:
 
 ```bash

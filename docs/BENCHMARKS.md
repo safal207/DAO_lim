@@ -81,6 +81,62 @@ Example output fields:
 - it is best used to generate a first public benchmark report with host specs,
   OS, Rust toolchain version, and commit SHA
 
+## First local benchmark report
+
+### Environment
+
+- Date: `2026-04-16`
+- Commit: `df68cf108200e107aea625d2d68fa2b2ad57f3ca`
+- OS: `Windows 10 Home`, version `2009`
+- CPU: `AMD Ryzen 7 5700U with Radeon Graphics`
+- RAM: `16 GB`
+- Rust toolchain: `rustc 1.93.0 (254b59607 2026-01-19)`
+
+### Benchmark setup
+
+- DAO config: `configs/dao-benchmark.toml`
+- Driver: `scripts/e2e_benchmark.py`
+- Warmup requests: `20`
+- Steady-state requests: `120`
+- Failover requests: `30`
+
+### Steady-state results
+
+- Mean latency: `22.13 ms`
+- p50 latency: `18.29 ms`
+- p95 latency: `40.91 ms`
+- Status counts: `{'200': 120}`
+- Backend distribution: `{'fast-primary': 120}`
+
+### Failover results
+
+- Mean latency: `58.03 ms`
+- p50 latency: `51.89 ms`
+- p95 latency: `75.23 ms`
+- Status counts: `{'200': 30}`
+- Backend distribution: `{'fallback-secondary': 30}`
+
+### Explain snapshot before failure
+
+- Selected upstream: `fast-primary`
+- Candidate states:
+  - `fast-primary`: `winner=true`, `circuit_open=false`
+  - `fallback-secondary`: `winner=false`, `circuit_open=false`
+
+### Explain snapshot after failure
+
+- Selected upstream: `fallback-secondary`
+- Candidate states:
+  - `fallback-secondary`: `winner=true`, `circuit_open=false`
+  - `fast-primary`: `winner=false`, `circuit_open=true`
+
+### Notes
+
+- Primary backend was switched into `503` mode before the failover run.
+- In this local harness, the proxy maintained `200` responses across the measured
+  failover window while moving traffic to the secondary backend.
+- This is a single-machine local benchmark, not yet a proxy-vs-proxy comparison.
+
 ## Benchmark report template
 
 ```markdown

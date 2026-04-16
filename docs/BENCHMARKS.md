@@ -78,6 +78,58 @@ Example output fields:
 - it is best used to generate a first public benchmark report with host specs,
   OS, Rust toolchain version, and commit SHA
 
+## Benchmark report template
+
+```markdown
+## DAO end-to-end benchmark report
+
+### Environment
+- Date: YYYY-MM-DD
+- Commit: `xxxxxxxx`
+- OS: Windows/Linux + version
+- CPU: ...
+- RAM: ...
+- Rust toolchain: `rustc --version`
+
+### Benchmark setup
+- DAO config: `configs/dao-benchmark.toml`
+- Driver: `scripts/e2e_benchmark.py`
+- Warmup requests: N
+- Steady-state requests: N
+- Failover requests: N
+
+### Steady-state results
+- Mean latency: X ms
+- p50 latency: X ms
+- p95 latency: X ms
+- Status counts: `...`
+- Backend distribution: `...`
+
+### Failover results
+- Mean latency: X ms
+- p50 latency: X ms
+- p95 latency: X ms
+- Status counts: `...`
+- Backend distribution: `...`
+
+### Explain snapshot before failure
+- Selected upstream: `...`
+- Candidate states:
+  - `fast-primary`: `winner=true/false`, `circuit_open=true/false`
+  - `fallback-secondary`: `winner=true/false`, `circuit_open=true/false`
+
+### Explain snapshot after failure
+- Selected upstream: `...`
+- Candidate states:
+  - `fast-primary`: `winner=true/false`, `circuit_open=true/false`
+  - `fallback-secondary`: `winner=true/false`, `circuit_open=true/false`
+
+### Notes
+- Primary backend was switched to `503` mode before failover run.
+- This is a local reproducible benchmark harness, not yet a proxy-vs-proxy comparison.
+- Next step: compare against Traefik or Nginx under the same local setup.
+```
+
 ## Recommended next step
 
 Publish one benchmark report generated from this harness that records:

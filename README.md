@@ -4,6 +4,15 @@
 
 ---
 
+## Review links
+
+- Grant evidence: [`docs/GRANT_EVIDENCE.md`](docs/GRANT_EVIDENCE.md)
+- Benchmarks: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
+- Validation: `cargo test`
+- Routing explainability: `daoctl explain`
+
+---
+
 ## Зачем это нужно
 
 Когда у вас несколько AI-бэкендов — разные модели, GPU-пулы, облачные и локальные эндпоинты — обычный round-robin не работает:

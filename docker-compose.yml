@@ -1,0 +1,37 @@
+services:
+  dao:
+    image: rust:1.75-slim
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: >
+      sh -lc "cargo run --release -p dao -- --config configs/dao-docker-demo.toml"
+    ports:
+      - "19080:19080"
+      - "19103:19103"
+      - "19102:19102"
+    depends_on:
+      - fast-primary
+      - fallback-secondary
+
+  fast-primary:
+    build:
+      context: ./examples/toy-backends
+    environment:
+      BACKEND_NAME: fast-primary
+      DELAY_MS: "12"
+      FAIL_MODE: "0"
+      PORT: "8080"
+    expose:
+      - "8080"
+
+  fallback-secondary:
+    build:
+      context: ./examples/toy-backends
+    environment:
+      BACKEND_NAME: fallback-secondary
+      DELAY_MS: "45"
+      FAIL_MODE: "0"
+      PORT: "8080"
+    expose:
+      - "8080"

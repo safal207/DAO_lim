@@ -8,6 +8,7 @@
 
 - Start here: [`docs/START_HERE.md`](docs/START_HERE.md)
 - 5-minute demo: [`docs/demo/FIVE_MINUTE_ROUTING_DEMO.md`](docs/demo/FIVE_MINUTE_ROUTING_DEMO.md)
+- Docker Compose demo: [`docs/demo/DOCKER_COMPOSE_DEMO.md`](docs/demo/DOCKER_COMPOSE_DEMO.md)
 - Grant evidence: [`docs/GRANT_EVIDENCE.md`](docs/GRANT_EVIDENCE.md)
 - Benchmarks: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
 - Benchmark evidence: [`docs/evidence/BENCHMARK_EVIDENCE_SNAPSHOT.md`](docs/evidence/BENCHMARK_EVIDENCE_SNAPSHOT.md)

@@ -6,6 +6,7 @@
 
 ## Review links
 
+- Start here: [`docs/START_HERE.md`](docs/START_HERE.md)
 - Grant evidence: [`docs/GRANT_EVIDENCE.md`](docs/GRANT_EVIDENCE.md)
 - Benchmarks: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
 - Validation: `cargo test`

@@ -107,6 +107,8 @@ curl http://localhost:9102/metrics
 
 These are good places for new contributors:
 
+Start with **documentation, demos, and example configs** under `docs/`, `examples/`, and `configs/`. That work is usually easy to review and does not change live routing behavior. **Routing score, policy, and core selection logic** live in `crates/dao-core/` (and related proxy paths) — treat those as a separate, higher-stakes area; use the list in **Changes that need deeper review** as a guide.
+
 - Documentation improvements.
 - Clean-machine quickstart validation.
 - `daoctl` usage examples.
@@ -176,3 +178,12 @@ A strong DAO_lim contribution should preserve three things:
 1. **Explainability** — users should understand why a backend was selected.
 2. **Reproducibility** — demos and benchmarks should be runnable locally.
 3. **No overclaiming** — performance and production claims should stay tied to evidence.
+
+## Further reading
+
+- [README.md](../README.md) — product story, quickstart, `daoctl` examples, architecture, roadmap.
+- [docs/BENCHMARKS.md](BENCHMARKS.md) — benchmark harness and how results are interpreted.
+- [docs/GRANT_EVIDENCE.md](GRANT_EVIDENCE.md) — grant/reviewer-facing evidence and non-claims.
+- [configs/dao.toml](../configs/dao.toml) — example gateway configuration (see also the [`configs/`](../configs/) directory).
+- [docs/demo/FIVE_MINUTE_ROUTING_DEMO.md](demo/FIVE_MINUTE_ROUTING_DEMO.md) — short explainable-routing walkthrough.
+- [docs/demo/DOCKER_COMPOSE_DEMO.md](demo/DOCKER_COMPOSE_DEMO.md) — Docker Compose–based local demo.

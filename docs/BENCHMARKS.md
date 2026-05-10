@@ -6,6 +6,9 @@ decision path in `crates/dao-core/benches/resonant_routing.rs`.
 It also now includes a small local end-to-end benchmark driver in
 `scripts/e2e_benchmark.py` backed by `configs/dao-benchmark.toml`.
 
+For a stricter pass/fail check of the failover behavior, this repository also
+includes `scripts/failover_smoke.py`.
+
 ## What it measures
 
 - `select_upstream` latency for `4`, `8`, `16`, and `32` upstream candidates
@@ -20,6 +23,14 @@ The end-to-end benchmark adds:
 - backend distribution under healthy conditions
 - failover behavior after the primary backend starts returning `503`
 - admin explain snapshots before and after the induced failure burst
+
+The failover smoke test adds assertions that:
+
+- steady-state traffic uses `fast-primary`
+- failover traffic uses `fallback-secondary`
+- `/admin/explain` selects `fast-primary` before failure
+- `/admin/explain` selects `fallback-secondary` after failure
+- the failed primary candidate reports `circuit_open=true`
 
 ## Run locally
 
@@ -67,12 +78,44 @@ Example output fields:
 - `backend use`
 - `selected` and `circuit_open` fields from `/admin/explain`
 
+## Run failover smoke test locally
+
+Build first:
+
+```bash
+cargo build --release -p dao -p daoctl
+```
+
+Then run:
+
+```bash
+python scripts/failover_smoke.py
+```
+
+The smoke test exits with code `0` when the failover behavior matches the
+expected local harness state. It prints a JSON result containing:
+
+- steady-state status counts
+- failover status counts
+- backend distribution before and after failure
+- selected upstream before and after failure
+- candidate state from `/admin/explain`
+
+A shorter run can be used during development:
+
+```bash
+python scripts/failover_smoke.py --steady-requests 8 --failover-requests 6
+```
+
+This is a local smoke test, not a production reliability proof.
+
 ## Why this matters for NLnet
 
 - makes the routing core measurable without external infra
 - gives a stable baseline before end-to-end proxy benchmarks
 - adds a reviewer-friendly live failover scenario on top of the microbench
 - keeps future regressions visible in CI by compiling the bench target
+- makes the failover behavior assertable through a dedicated local smoke script
 
 ## Evidence boundaries
 
@@ -80,6 +123,8 @@ Example output fields:
 - it does not yet compare against Traefik, Nginx, or Envoy
 - it is best used to generate a first public benchmark report with host specs,
   OS, Rust toolchain version, and commit SHA
+- the smoke test checks the local toy-backend failure path, not all real-world
+  failure modes
 
 ## First local benchmark report
 

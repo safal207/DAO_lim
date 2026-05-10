@@ -9,6 +9,7 @@
 - Start here: [`docs/START_HERE.md`](docs/START_HERE.md)
 - Grant evidence: [`docs/GRANT_EVIDENCE.md`](docs/GRANT_EVIDENCE.md)
 - Benchmarks: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
+- Benchmark evidence: [`docs/evidence/BENCHMARK_EVIDENCE_SNAPSHOT.md`](docs/evidence/BENCHMARK_EVIDENCE_SNAPSHOT.md)
 - Validation: `cargo test`
 - Routing explainability: `daoctl explain`
 

@@ -1,0 +1,59 @@
+# DAO Docker Compose demo configuration
+# Local demo only: one DAO gateway and two toy HTTP backends.
+
+[server]
+bind = "0.0.0.0:19080"
+workers = 2
+admin_bind = "0.0.0.0:19103"
+
+[telemetry]
+prometheus_bind = "0.0.0.0:19102"
+
+[routes]
+
+[[routes.rule]]
+name = "docker-demo-realtime"
+policy = "resonant"
+intent = "realtime"
+retry_attempts = 1
+
+  [routes.rule.match]
+  host = "bench.dao.local"
+  path_prefix = "/v1/"
+
+  [[routes.rule.upstreams]]
+  name = "fast-primary"
+  url = "http://fast-primary:8080"
+  intent = ["realtime", "low-latency"]
+  weight = 2
+
+    [routes.rule.upstreams.health_check]
+    path = "/health"
+    interval_secs = 1
+    timeout_secs = 1
+
+    [routes.rule.upstreams.circuit_breaker]
+    failure_threshold = 2
+    timeout_secs = 5
+    success_threshold = 1
+
+  [[routes.rule.upstreams]]
+  name = "fallback-secondary"
+  url = "http://fallback-secondary:8080"
+  intent = ["realtime"]
+  weight = 1
+
+    [routes.rule.upstreams.health_check]
+    path = "/health"
+    interval_secs = 1
+    timeout_secs = 1
+
+    [routes.rule.upstreams.circuit_breaker]
+    failure_threshold = 2
+    timeout_secs = 5
+    success_threshold = 1
+
+[policies.resonant]
+w_load = 0.6
+w_intent = 0.3
+w_tempo = 0.1

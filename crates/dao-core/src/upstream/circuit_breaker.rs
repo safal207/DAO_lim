@@ -124,8 +124,8 @@ impl CircuitBreaker {
                 *state = State::Open { opened_at: Instant::now() };
             }
             State::Open { .. } => {
-                // Уже открыт, обновляем время
-                *state = State::Open { opened_at: Instant::now() };
+                // Уже открыт — НЕ сбрасываем opened_at, иначе цепь
+                // никогда не перейдёт в HalfOpen под продолжающейся нагрузкой
             }
         }
     }

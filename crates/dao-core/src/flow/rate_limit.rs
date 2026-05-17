@@ -18,9 +18,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Token bucket для одного маршрута
+struct BucketState {
+    tokens: f64,
+    last_refill: Instant,
+}
+
 struct TokenBucket {
-    tokens: Mutex<f64>,
-    last_refill: Mutex<Instant>,
+    state: Mutex<BucketState>,
     /// Вместимость и скорость пополнения (токенов/сек)
     rate: f64,
 }
@@ -29,8 +33,10 @@ impl TokenBucket {
     fn new(rps: u32) -> Self {
         let rate = rps as f64;
         Self {
-            tokens: Mutex::new(rate), // начинаем с полным bucket
-            last_refill: Mutex::new(Instant::now()),
+            state: Mutex::new(BucketState {
+                tokens: rate, // начинаем с полным bucket
+                last_refill: Instant::now(),
+            }),
             rate,
         }
     }
@@ -39,17 +45,16 @@ impl TokenBucket {
     /// Возвращает `true` — запрос разрешён, `false` — превышен лимит (429).
     fn try_consume(&self) -> bool {
         let now = Instant::now();
-        let mut tokens = self.tokens.lock();
-        let mut last = self.last_refill.lock();
+        let mut state = self.state.lock();
 
-        let elapsed = now.duration_since(*last).as_secs_f64();
-        *last = now;
+        let elapsed = now.duration_since(state.last_refill).as_secs_f64();
+        state.last_refill = now;
 
         // Пополнение токенов пропорционально прошедшему времени
-        *tokens = (*tokens + elapsed * self.rate).min(self.rate);
+        state.tokens = (state.tokens + elapsed * self.rate).min(self.rate);
 
-        if *tokens >= 1.0 {
-            *tokens -= 1.0;
+        if state.tokens >= 1.0 {
+            state.tokens -= 1.0;
             true
         } else {
             false
@@ -135,8 +140,8 @@ mod tests {
         // Эмулируем прошедшее время через прямой доступ к bucket
         {
             let bucket = limiter.buckets.get("test-route").unwrap();
-            let mut last = bucket.last_refill.lock();
-            *last = Instant::now() - std::time::Duration::from_secs(1);
+            let mut state = bucket.state.lock();
+            state.last_refill = Instant::now() - std::time::Duration::from_secs(1);
         }
 
         // После 1 секунды должно быть снова доступно

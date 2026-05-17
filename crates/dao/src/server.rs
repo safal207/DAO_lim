@@ -318,13 +318,24 @@ impl DaoServer {
         use base64::{Engine, engine::general_purpose::STANDARD};
         use sha1::{Sha1, Digest};
 
-        // Валидация WebSocket handshake
-        let ws_key = req
+        // Валидация WebSocket handshake (RFC 6455 §4.1)
+        let ws_key = match req
             .headers()
             .get(SEC_WEBSOCKET_KEY)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        {
+            Some(k) if !k.is_empty() => k.to_string(),
+            _ => {
+                return Response::builder()
+                    .status(400)
+                    .body(
+                        Empty::<Bytes>::new()
+                            .map_err(|never: Infallible| match never {})
+                            .boxed(),
+                    )
+                    .map_err(|e| dao_core::DaoError::Internal(format!("Response build error: {}", e)));
+            }
+        };
 
         // Вычисляем Sec-WebSocket-Accept
         let mut hasher = Sha1::new();

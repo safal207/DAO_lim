@@ -232,7 +232,7 @@ impl UpstreamStats {
         for (ts, _) in &self.rps_window {
             let age = now.duration_since(*ts).as_secs();
             if age < 60 {
-                let bin = (age / 10) as usize;
+                let bin = ((age / 10) as usize).min(5);
                 bins[bin] += 1;
             }
         }

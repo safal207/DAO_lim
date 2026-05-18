@@ -11,6 +11,16 @@ use crate::sense::Sense;
 use crate::explain::{CandidateScore, CanaryInfo, ExplainResult, PolicyWeightsInfo, ScoreComponents};
 use std::sync::Arc;
 
+/// Лёгкая инлайн-версия `Sense::get_resonance_metrics` для одного upstream'а.
+/// Используется в горячем пути выбора, чтобы избежать линейного поиска по имени
+/// и повторных клонов UpstreamStats (с дорогой Histogram внутри).
+fn resonance_from(stats: &crate::upstream::UpstreamStats) -> (f64, f64) {
+    let latency = (stats.p95_latency_ms() / 100.0).min(10.0);
+    let error = stats.error_rate() * 10.0;
+    let queue = stats.queue_depth_norm() * 10.0;
+    (latency + error + queue, stats.tempo_spikiness())
+}
+
 pub mod policy;
 pub mod selector;
 
@@ -53,50 +63,33 @@ impl Align {
         let weights = self.policies.get(policy_name)
             .unwrap_or(&default_weights);
 
-        let metrics = self.sense.get_resonance_metrics();
-
         // Вычисление resonant score для каждого upstream
-        // Упstreams с открытым circuit breaker исключаются, но если
-        // все открыты — используем всех (лучше попробовать, чем 503).
-        let available: Vec<_> = upstreams.iter().filter(|u| u.is_available()).cloned().collect();
-        let candidates = if available.is_empty() { upstreams.to_vec() } else { available };
+        // Upstreams с открытым circuit breaker исключаются, но если все
+        // открыты — используем всех (лучше попробовать, чем 503).
+        // Без аллокации Vec для available: один проход + флаг.
+        let any_available = upstreams.iter().any(|u| u.is_available());
 
-        let mut scored_upstreams: Vec<_> = candidates
-            .iter()
-            .map(|upstream| {
-                let resonance = metrics
-                    .iter()
-                    .find(|m| m.upstream_name == upstream.name)
-                    .map(|m| m.load_resonance)
-                    .unwrap_or(0.0);
+        let mut best: Option<(&Arc<UpstreamState>, f64)> = None;
+        for upstream in upstreams {
+            if any_available && !upstream.is_available() {
+                continue;
+            }
 
-                let intent_gap = if let Some(req_intent) = request_intent {
-                    upstream.intent_gap(req_intent)
-                } else {
-                    0.0
-                };
+            let stats = upstream.get_stats();
+            let (resonance, tempo_spike) = resonance_from(&stats);
+            let intent_gap = request_intent.map(|i| upstream.intent_gap(i)).unwrap_or(0.0);
 
-                let tempo_spike = metrics
-                    .iter()
-                    .find(|m| m.upstream_name == upstream.name)
-                    .map(|m| m.tempo_spikiness)
-                    .unwrap_or(0.0);
+            let score = weights.w_load * resonance
+                + weights.w_intent * intent_gap
+                + weights.w_tempo * tempo_spike;
 
-                let score = weights.w_load * resonance
-                    + weights.w_intent * intent_gap
-                    + weights.w_tempo * tempo_spike;
+            match best {
+                Some((_, best_score)) if !(score < best_score) => {}
+                _ => best = Some((upstream, score)),
+            }
+        }
 
-                (upstream.clone(), score)
-            })
-            .collect();
-
-        // Сортировка по score (меньше = лучше)
-        scored_upstreams.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Возврат лучшего upstream
-        scored_upstreams.first().map(|(u, _)| u.clone())
+        best.map(|(u, _)| u.clone())
     }
 
     /// Выбор upstream через canary (взвешенный случайный)
@@ -155,39 +148,25 @@ impl Align {
         let default_weights = PolicyWeights::default();
         let weights = self.policies.get(policy_name).unwrap_or(&default_weights);
 
-        let metrics = self.sense.get_resonance_metrics();
-
-        // Все кандидаты — включая с открытым circuit (для отображения в explain)
-        let available_names: std::collections::HashSet<_> = upstreams
-            .iter()
-            .filter(|u| u.is_available())
-            .map(|u| u.name.clone())
-            .collect();
-        let has_available = !available_names.is_empty();
+        // Все кандидаты — включая с открытым circuit (для отображения в explain).
+        // Один проход для определения наличия доступных без аллокации HashSet имён.
+        let has_available = upstreams.iter().any(|u| u.is_available());
 
         let mut candidates: Vec<CandidateScore> = upstreams
             .iter()
             .map(|upstream| {
                 let circuit_status = upstream.circuit_status();
-                let circuit_open = has_available && !available_names.contains(&upstream.name);
+                let circuit_open = has_available && !upstream.is_available();
 
-                let resonance = metrics
-                    .iter()
-                    .find(|m| m.upstream_name == upstream.name)
-                    .map(|m| m.load_resonance)
-                    .unwrap_or(0.0);
+                // Один клон UpstreamStats на upstream вместо двух вызовов
+                let stats = upstream.get_stats();
+                let (resonance, tempo_spike) = resonance_from(&stats);
 
                 let intent_gap = if let Some(req_intent) = request_intent {
                     upstream.intent_gap(req_intent)
                 } else {
                     0.0
                 };
-
-                let tempo_spike = metrics
-                    .iter()
-                    .find(|m| m.upstream_name == upstream.name)
-                    .map(|m| m.tempo_spikiness)
-                    .unwrap_or(0.0);
 
                 let load_component = weights.w_load * resonance;
                 let intent_component = weights.w_intent * intent_gap;
@@ -198,8 +177,6 @@ impl Align {
                 } else {
                     load_component + intent_component + tempo_component
                 };
-
-                let stats = upstream.get_stats();
 
                 CandidateScore {
                     name: upstream.name.clone(),

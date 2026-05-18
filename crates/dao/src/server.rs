@@ -32,7 +32,9 @@ pub struct DaoServer {
     sense: Arc<Sense>,
     align: Arc<Align>,
     memory: Arc<Memory>,
-    upstreams: Arc<Vec<UpstreamState>>,
+    /// O(1)-индекс upstream по имени — `Arc<UpstreamState>` создаётся один раз
+    /// на старте, на каждом запросе делается только Arc::clone.
+    upstreams_by_name: Arc<std::collections::HashMap<String, Arc<UpstreamState>>>,
     pool: Arc<ConnectionPool>,
     rate_limiter: RateLimiterMap,
 }
@@ -40,7 +42,7 @@ pub struct DaoServer {
 /// Состояние для WebSocket handler (клонируется в spawn)
 #[derive(Clone)]
 struct WsHandlerState {
-    upstreams: Arc<Vec<UpstreamState>>,
+    upstreams_by_name: Arc<std::collections::HashMap<String, Arc<UpstreamState>>>,
     memory: Arc<Memory>,
     sense: Arc<Sense>,
     align: Arc<Align>,
@@ -72,9 +74,7 @@ impl WsHandlerState {
 
         let upstream_url = if let Some(route) = route {
             let route_upstreams: Vec<_> = route.upstreams.iter()
-                .filter_map(|uc| {
-                    self.upstreams.iter().find(|u| u.name == uc.name).map(|u| Arc::new(u.clone()))
-                })
+                .filter_map(|uc| self.upstreams_by_name.get(&uc.name).map(Arc::clone))
                 .collect();
 
             let intent = route.intent();
@@ -118,12 +118,20 @@ impl DaoServer {
         upstreams: Arc<Vec<UpstreamState>>,
         rate_limiter: RateLimiterMap,
     ) -> Self {
+        // Поднимаем имя→Arc<UpstreamState> один раз при старте: O(1) лукап на запросе.
+        // Inner Arc'ы (stats, circuit) shared с Sense — записи метрик работают
+        // одинаково через любую копию.
+        let upstreams_by_name: std::collections::HashMap<String, Arc<UpstreamState>> = upstreams
+            .iter()
+            .map(|u| (u.name.clone(), Arc::new(u.clone())))
+            .collect();
+        drop(upstreams);
         Self {
             gate: Arc::new(gate),
             sense: Arc::new(sense),
             align: Arc::new(align),
             memory,
-            upstreams,
+            upstreams_by_name: Arc::new(upstreams_by_name),
             pool: Arc::new(ConnectionPool::new()),
             rate_limiter,
         }
@@ -270,7 +278,7 @@ impl DaoServer {
     /// Обработка WebSocket соединения — bidirectional proxy
     async fn handle_websocket_connection(self: Arc<Self>, conn: Connection) -> Result<()> {
         let state = Arc::new(WsHandlerState {
-            upstreams: self.upstreams.clone(),
+            upstreams_by_name: self.upstreams_by_name.clone(),
             memory: self.memory.clone(),
             sense: self.sense.clone(),
             align: self.align.clone(),
@@ -496,11 +504,9 @@ impl DaoServer {
             return self.error_response(429, "Too Many Requests");
         }
 
-        // Upstream кандидаты для маршрута
-        let route_upstreams: Vec<_> = route.upstreams.iter()
-            .filter_map(|uc| {
-                self.upstreams.iter().find(|u| u.name == uc.name).map(|u| Arc::new(u.clone()))
-            })
+        // Upstream кандидаты для маршрута — Arc::clone, без клона UpstreamState
+        let route_upstreams: Vec<Arc<UpstreamState>> = route.upstreams.iter()
+            .filter_map(|uc| self.upstreams_by_name.get(&uc.name).map(Arc::clone))
             .collect();
 
         if route_upstreams.is_empty() {
@@ -510,13 +516,16 @@ impl DaoServer {
 
         let request_intent = route.intent();
         let max_retries = route.retry_attempts as usize;
-        let mut tried: Vec<String> = Vec::new();
+        // Pointer-identity tracking (usize чтобы быть Send) — никаких клонов
+        // String и линейного поиска в Vec.
+        let mut tried: std::collections::HashSet<usize> =
+            std::collections::HashSet::with_capacity(max_retries + 1);
 
         // Retry loop: пробуем до max_retries+1 раз с разными upstream'ами
         for attempt in 0..=max_retries {
-            // Кандидаты = ещё не опробованные
+            // Кандидаты = ещё не опробованные (O(1) lookup в HashSet)
             let candidates: Vec<_> = route_upstreams.iter()
-                .filter(|u| !tried.contains(&u.name))
+                .filter(|u| !tried.contains(&(Arc::as_ptr(u) as usize)))
                 .cloned()
                 .collect();
 
@@ -538,7 +547,7 @@ impl DaoServer {
                 break;
             };
 
-            tried.push(upstream.name.clone());
+            tried.insert(Arc::as_ptr(&upstream) as usize);
 
             // Строим запрос для этой попытки (тело клонируется дёшево — Arc)
             let attempt_req = build_attempt_request(

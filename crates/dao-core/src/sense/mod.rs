@@ -6,6 +6,7 @@
 //! - Резонанс-метрики для политик
 
 use crate::upstream::UpstreamState;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,11 +17,20 @@ pub use metrics::{RequestMetrics, SystemMetrics};
 #[derive(Clone)]
 pub struct Sense {
     upstreams: Arc<Vec<UpstreamState>>,
+    by_name: Arc<HashMap<String, usize>>,
 }
 
 impl Sense {
     pub fn new(upstreams: Arc<Vec<UpstreamState>>) -> Self {
-        Self { upstreams }
+        let by_name = upstreams
+            .iter()
+            .enumerate()
+            .map(|(i, u)| (u.name.clone(), i))
+            .collect();
+        Self {
+            upstreams,
+            by_name: Arc::new(by_name),
+        }
     }
 
     /// Запись результата запроса к upstream
@@ -30,8 +40,8 @@ impl Sense {
         latency: Duration,
         success: bool,
     ) {
-        if let Some(upstream) = self.upstreams.iter().find(|u| u.name == upstream_name) {
-            upstream.record_request(latency, success);
+        if let Some(&idx) = self.by_name.get(upstream_name) {
+            self.upstreams[idx].record_request(latency, success);
         }
     }
 
@@ -55,7 +65,7 @@ impl Sense {
 
     /// Получение состояния конкретного upstream
     pub fn get_upstream_state(&self, name: &str) -> Option<&UpstreamState> {
-        self.upstreams.iter().find(|u| u.name == name)
+        self.by_name.get(name).map(|&i| &self.upstreams[i])
     }
 }
 

@@ -1,17 +1,20 @@
 # Start Here — Contributing to DAO_lim
 
-DAO_lim is an open-source Rust gateway for AI infrastructure. It routes requests across heterogeneous backends using backend health, latency, error-rate, load, and request-intent signals, while exposing explainable routing decisions through `daoctl`.
+## What is DAO_lim?
 
-The short version:
+**In plain terms:** DAO_lim is an open-source **Rust gateway** you run in front of multiple AI backends (cloud APIs, local GPUs, different models). It forwards client traffic and **chooses which backend to use** using live signals such as latency, errors, load, and how well the request’s **intent** (for example `realtime` vs `batch`) matches what each backend is good at.
+
+**Core product idea:** **explainable AI gateway routing** — decisions use **backend health** (latency, errors, load) and **request intent**, and you can **inspect why** a backend was picked via `daoctl explain` instead of guessing.
+
+**Slightly more detail:** DAO_lim routes requests across heterogeneous backends using those signals and exposes explainable routing decisions through `daoctl`.
+
+The one-line summary:
 
 > Static round-robin is not enough for AI backends. DAO_lim routes by health + intent and shows why each backend was selected.
 
-## 10-minute onboarding path
+## Build and test
 
-1. Read the root `README.md` for the product story, quickstart, architecture, and roadmap.
-2. Read `docs/GRANT_EVIDENCE.md` for reviewer-facing positioning, current evidence, and explicit non-claims.
-3. Read `docs/BENCHMARKS.md` to understand the current benchmark harness and evidence boundaries.
-4. Build and test the workspace locally:
+From the repository root:
 
 ```bash
 cargo build --release
@@ -19,7 +22,15 @@ cargo test
 cargo test -p dao-core
 ```
 
-5. Try the routing explanation path:
+Optional verbose tests:
+
+```bash
+RUST_LOG=debug cargo test
+```
+
+## Explain a routing decision (`daoctl explain`)
+
+After `cargo build --release`, you can ask the tooling how a request would be reasoned about (host, path, intent):
 
 ```bash
 ./target/release/daoctl explain \
@@ -28,9 +39,53 @@ cargo test -p dao-core
   --intent realtime
 ```
 
+## Contributing: docs and demos vs routing core
+
+This split matches how we review PRs.
+
+### Docs, demos, and examples (usually lower risk)
+
+Good first contributions tend to live here — they improve onboarding without changing core routing math:
+
+- **Documentation** — clearer guides, typos, navigation (including this file under `docs/`).
+- **Demos** — walkthroughs under `docs/demo/`, Docker-based demos, toy backends under `examples/`.
+- **Example configs** — realistic snippets under `configs/` for common AI setups.
+
+These areas are **not** the same as changing how the gateway scores or selects backends.
+
+### Routing core (higher risk — coordinate first)
+
+Work that changes **how requests are scored, selected, or failed over** usually touches **`crates/dao-core/`** and related proxy/control paths in **`crates/dao/`**, **`crates/daoctl/`**, admin surfaces, or WASM filters. Treat that as **routing-core / behavior** work: open an issue or discuss before large changes, and expect deeper review. See **Changes that need deeper review** below for concrete examples.
+
+### Safe contribution areas (examples)
+
+Here are **three** typical safe zones (there are more in the bullets above):
+
+1. Documentation and contributor onboarding (`docs/`, README polish).
+2. Demos and reproducible examples (`docs/demo/`, `examples/toy-backends/`).
+3. Example configs and benchmark/write-up improvements (`configs/`, benchmark docs — narrative and harness clarity, without changing routing semantics).
+
+Additional ideas:
+
+- Clean-machine quickstart validation.
+- `daoctl` usage examples.
+- Docker Compose local demo.
+- Benchmark evidence summaries.
+- README badges and visual polish.
+- Example configs for AI backends.
+- Local toy-backend demos.
+- Tests that **preserve** existing routing semantics.
+
+## 10-minute onboarding path
+
+1. Read the root [`README.md`](../README.md) for the product story, quickstart, architecture, and roadmap.
+2. Read [`docs/GRANT_EVIDENCE.md`](GRANT_EVIDENCE.md) for reviewer-facing positioning, current evidence, and explicit non-claims.
+3. Read [`docs/BENCHMARKS.md`](BENCHMARKS.md) for the benchmark harness and evidence boundaries.
+4. Run **Build and test** (section above).
+5. Run **`daoctl explain`** (section above).
 6. Pick an issue labeled `good first issue` or `help wanted`.
 
-## What DAO_lim is
+## What DAO_lim does in the pipeline
 
 DAO_lim sits between clients and AI/backend services.
 
@@ -48,7 +103,7 @@ It is designed for teams running multiple AI backends, such as:
 - tool servers,
 - heterogeneous GPU nodes.
 
-DAO_lim's differentiator is not only proxying traffic. Its differentiator is **inspectable backend selection**.
+DAO_lim's differentiator is not only proxying traffic — it is **inspectable backend selection**.
 
 ## Core concepts
 
@@ -61,61 +116,17 @@ DAO_lim's differentiator is not only proxying traffic. Its differentiator is **i
 - **`daoctl explain`** — debugging path that shows why a backend was selected.
 - **Benchmark harness** — local reproducible setup for measuring routing and failover behavior.
 
-## Local validation
-
-Build the binaries:
-
-```bash
-cargo build --release
-```
-
-Run tests:
-
-```bash
-cargo test
-cargo test -p dao-core
-```
-
-Run with debug logs when needed:
-
-```bash
-RUST_LOG=debug cargo test
-```
-
-Run the gateway locally:
+## Run the gateway locally
 
 ```bash
 ./target/release/dao --config configs/dao.toml
 ```
 
-Inspect routing:
-
-```bash
-./target/release/daoctl explain \
-  --host llm.myapp.com \
-  --path /v1/chat/completions \
-  --intent realtime
-```
-
-Check metrics if the gateway is running with Prometheus enabled:
+With Prometheus enabled in config, metrics may be exposed (example):
 
 ```bash
 curl http://localhost:9102/metrics
 ```
-
-## Safe contribution zones
-
-These are good places for new contributors:
-
-- Documentation improvements.
-- Clean-machine quickstart validation.
-- `daoctl` usage examples.
-- Docker Compose local demo.
-- Benchmark evidence summaries.
-- README badges and visual polish.
-- Example configs for AI backends.
-- Local toy-backend demos.
-- Tests that preserve existing routing semantics.
 
 ## Changes that need deeper review
 
@@ -176,3 +187,12 @@ A strong DAO_lim contribution should preserve three things:
 1. **Explainability** — users should understand why a backend was selected.
 2. **Reproducibility** — demos and benchmarks should be runnable locally.
 3. **No overclaiming** — performance and production claims should stay tied to evidence.
+
+## Further reading
+
+- [README.md](../README.md) — product story, quickstart, `daoctl` examples, architecture, roadmap.
+- [docs/BENCHMARKS.md](BENCHMARKS.md) — benchmark harness and how results are interpreted.
+- [docs/GRANT_EVIDENCE.md](GRANT_EVIDENCE.md) — grant/reviewer-facing evidence and non-claims.
+- [configs/dao.toml](../configs/dao.toml) — example gateway configuration (see also the [`configs/`](../configs/) directory).
+- [docs/demo/FIVE_MINUTE_ROUTING_DEMO.md](demo/FIVE_MINUTE_ROUTING_DEMO.md) — short explainable-routing walkthrough.
+- [docs/demo/DOCKER_COMPOSE_DEMO.md](demo/DOCKER_COMPOSE_DEMO.md) — Docker Compose–based local demo.
